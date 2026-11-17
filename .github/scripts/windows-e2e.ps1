@@ -29,6 +29,13 @@ function Check([bool]$ok, [string]$what) {
     }
     Write-Host "ok: $what"
 }
+function Save-Screen([string]$file) {
+    Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+    $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+    [System.Drawing.Graphics]::FromImage($bmp).CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+    $bmp.Save($file)
+}
 function Blocklist {
     $key = "$chrome\URLBlocklist"
     if (-not (Test-Path $key)) { return @() }
@@ -73,8 +80,16 @@ if ($App) {
         $env:DEEPWORK_DEBUG_SHOT = Join-Path $shots "$page.png"
         $env:DEEPWORK_DEBUG_SIZE = '1000x760'
         # Run the installed copy, with MSYS2 off the PATH: the bundle must be complete.
-        $p = Start-Process (Join-Path $dir 'deepwork.exe') -PassThru
-        if (-not $p.WaitForExit(60000)) { $p.Kill(); Check $false "the app rendered $page in time" }
+        $log = Join-Path $shots "$page.log"
+        $p = Start-Process (Join-Path $dir 'deepwork.exe') -PassThru `
+            -RedirectStandardError $log -RedirectStandardOutput "$log.out"
+        if (-not $p.WaitForExit(60000)) {
+            Save-Screen (Join-Path $shots "desktop-$page.png")
+            $p.Kill()
+            Get-Content $log, "$log.out" -ErrorAction SilentlyContinue
+            Check $false "the app rendered $page in time"
+        }
+        Get-Content $log -ErrorAction SilentlyContinue
         Check (Test-Path $env:DEEPWORK_DEBUG_SHOT) "screenshot of $page"
     }
     Remove-Item Env:DEEPWORK_DEBUG_PAGE, Env:DEEPWORK_DEBUG_SHOT, Env:DEEPWORK_DEBUG_SIZE

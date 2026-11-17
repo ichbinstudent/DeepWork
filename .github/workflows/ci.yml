@@ -91,6 +91,13 @@ jobs:
         run: |
           cargo build --release --locked -p deepwork
           .github/scripts/bundle-windows-app.sh app-bundle
+      - name: Try the app inside MSYS2
+        shell: msys2 {0}
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/shots"
+          DEEPWORK_DEBUG_SHOT="$(cygpath -w "$RUNNER_TEMP/shots/msys2.png")" DEEPWORK_DEBUG_PAGE=settings \
+            timeout 60 ./target-gnu/release/deepwork.exe; echo "exit status $?"
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
       - name: End-to-end test
