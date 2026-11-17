@@ -1,6 +1,8 @@
 //! Command-line control for DeepWork.
 
 use deepwork_core::client::Client;
+use deepwork_core::lists;
+use deepwork_core::model::{BlockConfig, LockKind, normalize_domain};
 use deepwork_core::protocol::BlockStatus;
 use deepwork_core::{format_duration, now};
 
@@ -9,10 +11,46 @@ const USAGE: &str = "usage: deepworkctl <command>
   status                 show blocks and what's running
   start <block> <min>    start a block for <min> minutes
   stop <block>           stop a block (if it isn't locked)
+  unlock <block>         unlock a block with a random-text lock
   freeze <min>           lock the whole computer for <min> minutes
   locked                 exit 0 if any block is locked or a freeze is running
+  lists                  show the built-in filter lists
+  add <name> [--lock none|random|strict] <site|@list>...
+                         create a block, e.g. add Social @social reddit.com
+  delete <block>         delete a block (if it isn't locked)
 
 <block> is a block's name or id.";
+
+/// Build a block from `add` arguments.
+fn parse_add(name: &str, rest: &[&str]) -> Result<BlockConfig, String> {
+    let mut cfg = BlockConfig {
+        name: name.to_string(),
+        ..BlockConfig::default()
+    };
+    let mut args = rest.iter();
+    while let Some(a) = args.next() {
+        if *a == "--lock" {
+            cfg.lock = match args.next().copied() {
+                Some("none") => LockKind::None,
+                Some("random") => LockKind::Random,
+                Some("strict") => LockKind::Strict,
+                _ => return Err("--lock takes none, random or strict".into()),
+            };
+        } else if let Some(id) = a.strip_prefix('@') {
+            if lists::get(id).is_none() {
+                return Err(format!("no filter list “{id}” (see: deepworkctl lists)"));
+            }
+            cfg.lists.push(id.to_string());
+        } else {
+            cfg.websites
+                .push(normalize_domain(a).map_err(|e| format!("{a}: {e}"))?);
+        }
+    }
+    if cfg.websites.is_empty() && cfg.lists.is_empty() {
+        return Err("name at least one website or @list".into());
+    }
+    Ok(cfg)
+}
 
 fn find<'a>(blocks: &'a [BlockStatus], key: &str) -> Option<&'a BlockStatus> {
     blocks.iter().find(|b| b.id == key).or_else(|| {
@@ -43,7 +81,7 @@ fn main() {
                 println!("❄  Frozen for {}", format_duration(s.frozen_until - t));
             }
             if s.blocks.is_empty() {
-                println!("No blocks yet. Open DeepWork to create one.");
+                println!("No blocks yet. Open DeepWork or use “deepworkctl add” to create one.");
             }
             for b in &s.blocks {
                 let state = if b.on_break {
@@ -88,6 +126,42 @@ fn main() {
             client.stop_block(&b.id).unwrap_or_else(|e| fail(&e));
             println!("Stopped “{}”", b.config.name);
         }
+        ["unlock", key] => {
+            let s = status();
+            let b = find(&s.blocks, key).unwrap_or_else(|| fail(&"no such block"));
+            let text = client.unlock_challenge(&b.id).unwrap_or_else(|e| fail(&e));
+            println!("Type this text to unlock “{}”:\n\n{text}\n", b.config.name);
+            let mut answer = String::new();
+            std::io::stdin()
+                .read_line(&mut answer)
+                .unwrap_or_else(|e| fail(&e));
+            client
+                .unlock(&b.id, answer.trim_end_matches(['\r', '\n']))
+                .unwrap_or_else(|e| fail(&e));
+            println!("Unlocked “{}”", b.config.name);
+        }
+        ["lists"] => {
+            for l in lists::LISTS {
+                println!(
+                    "@{:<12} {:<26} {} sites, {} apps",
+                    l.id,
+                    l.name,
+                    l.websites.len(),
+                    l.apps.len()
+                );
+            }
+        }
+        ["add", name, rest @ ..] => {
+            let cfg = parse_add(name, rest).unwrap_or_else(|e| fail(&e));
+            let id = client.create_block(cfg, None).unwrap_or_else(|e| fail(&e));
+            println!("Created “{name}” [{id}]. Start it with: deepworkctl start {id} <minutes>");
+        }
+        ["delete", key] => {
+            let s = status();
+            let b = find(&s.blocks, key).unwrap_or_else(|| fail(&"no such block"));
+            client.delete_block(&b.id).unwrap_or_else(|e| fail(&e));
+            println!("Deleted “{}”", b.config.name);
+        }
         ["freeze", mins] => {
             let m: u32 = mins
                 .parse()
@@ -104,5 +178,25 @@ fn main() {
             eprintln!("{USAGE}");
             std::process::exit(2);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn add_arguments() {
+        let cfg = parse_add(
+            "Social",
+            &["--lock", "strict", "@social", "https://www.Reddit.com/r/x"],
+        )
+        .unwrap();
+        assert_eq!(cfg.lock, LockKind::Strict);
+        assert_eq!(cfg.lists, ["social"]);
+        assert_eq!(cfg.websites, ["reddit.com"]);
+        assert!(parse_add("x", &[]).is_err());
+        assert!(parse_add("x", &["@nope"]).is_err());
+        assert!(parse_add("x", &["--lock", "hardcore", "a.com"]).is_err());
     }
 }

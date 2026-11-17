@@ -1,0 +1,100 @@
+name: Release
+
+# Push a tag like v0.1.0 (matching the version in Cargo.toml) to build the
+# packages and create a draft release. Running it by hand only builds them.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    # Debian 13 has the oldest glibc, GTK and libadwaita that DeepWork
+    # supports, so the binaries also run on every newer distribution.
+    container: debian:trixie
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config \
+            libgtk-4-dev libadwaita-1-dev libglib2.0-dev-bin curl ca-certificates git
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@v4
+      - name: Check the version
+        run: |
+          v=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$v" ]; then
+            echo "Tag $GITHUB_REF_NAME doesn't match version $v in Cargo.toml" >&2
+            exit 1
+          fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Build
+        run: cargo build --release --locked
+      - name: Package
+        run: |
+          name="deepwork-$VERSION-linux-x86_64"
+          mkdir -p "$name/bin" "$name/assets"
+          cp target/release/deepwork target/release/deepwork-daemon target/release/deepworkctl "$name/bin/"
+          cp -r data "$name/"
+          cp assets/icon.svg "$name/assets/"
+          cp install.sh uninstall.sh README.md LICENSE "$name/"
+          tar -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64
+          path: deepwork-*.tar.gz
+
+  # The service and deepworkctl; the app isn't built for Windows yet.
+  windows:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch: x64
+          - target: aarch64-pc-windows-msvc
+            arch: arm64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup update stable && rustup default stable && rustup target add ${{ matrix.target }}
+      - name: Build
+        run: cargo build --release --locked -p deepwork-daemon --target ${{ matrix.target }}
+      - name: Package
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $name = "deepwork-$v-windows-${{ matrix.arch }}"
+          New-Item -ItemType Directory $name | Out-Null
+          $bin = "target/${{ matrix.target }}/release"
+          Copy-Item "$bin/deepwork-daemon.exe", "$bin/deepworkctl.exe", windows/install.ps1, windows/uninstall.ps1, README.md, LICENSE $name
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ matrix.arch }}
+          path: deepwork-*.zip
+
+  release:
+    needs: [linux, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      - name: Create a draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --draft --title "DeepWork ${GITHUB_REF_NAME#v}" --generate-notes

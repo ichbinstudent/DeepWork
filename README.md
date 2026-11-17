@@ -76,7 +76,9 @@ blocks from a root system service, so closing the app doesn't end a block.
   KDE and most other desktops support it out of the box. The countdown can be hidden from the menu.
 - **Notifications** when an app is blocked or a block starts or ends.
 - **Clock-change protection**: changing the system clock doesn't end blocks early.
-- **CLI**: `deepworkctl status | start <block> <min> | stop <block> | freeze <min> | locked`.
+- **CLI**: `deepworkctl status | start <block> <min> | stop <block> | unlock <block> | freeze <min> | locked`,
+  and `deepworkctl add <name> [--lock none|random|strict] <site|@list>… | delete <block> | lists` to
+  manage blocks without the app.
 
 ## Hardcore mode
 
@@ -103,8 +105,24 @@ confirmation and warns if you're in a group such as `docker` that can still get 
 
 ## Install
 
-DeepWork needs systemd, GTK ≥ 4.14, libadwaita ≥ 1.7 and Rust ≥ 1.92 (via [rustup](https://rustup.rs)).
-`nftables` is needed for the encrypted-DNS blocking and HTTPS filtering.
+### Linux, from a release
+
+Download `deepwork-<version>-linux-x86_64.tar.gz` from the
+[releases](https://github.com/ichbinstudent/deepwork/releases), unpack it and run the installer as
+your normal user (not root):
+
+```sh
+tar -xzf deepwork-*-linux-x86_64.tar.gz
+cd deepwork-*-linux-x86_64
+./install.sh          # uses sudo to install into /usr/local and start the service
+```
+
+The binaries need systemd, GTK ≥ 4.14 and libadwaita ≥ 1.7 (Debian 13, Ubuntu 25.04, Fedora 42,
+Arch or newer); `nftables` for the encrypted-DNS blocking and HTTPS filtering.
+
+### Linux, from source
+
+Building needs Rust ≥ 1.92 (via [rustup](https://rustup.rs)) and the development packages:
 
 | Distribution | Build dependencies |
 | --- | --- |
@@ -137,6 +155,34 @@ This installs:
 
 To remove it, run `./uninstall.sh`. Add `--purge` to also delete your data. Uninstalling is refused
 while a block is locked or a freeze is running.
+
+### Windows (experimental)
+
+Windows releases contain the service and `deepworkctl` for x64 and ARM; the app isn't available yet.
+Websites are blocked through the hosts file, plus Firefox's policies. Download
+`deepwork-<version>-windows-x64.zip` (or `-arm64`), unpack it, and in an administrator PowerShell:
+
+```powershell
+cd deepwork-*-windows-x64
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+This copies the programs to `C:\Program Files\DeepWork`, puts `deepworkctl` on the PATH, and runs
+the service as SYSTEM from a scheduled task that starts with Windows. Then, in a new terminal:
+
+```powershell
+deepworkctl lists                         # built-in filter lists
+deepworkctl add Social --lock strict @social reddit.com
+deepworkctl start Social 60
+```
+
+Blocks and settings live in `C:\ProgramData\DeepWork`, which only administrators can change. Only
+the user who installed it (and administrators) may control the service; others can be added to
+`allowed_users` in `config.json` by the last number of their SID (`whoami /user`). Locks only stop
+standard users: any administrator can end the scheduled task. `uninstall.ps1` removes it again
+(`-Purge` also deletes the data).
+
+DeepWork has had little testing on Windows so far. Please report what doesn't work.
 
 ## How it works
 
@@ -189,12 +235,12 @@ the lock menu).
 | Freeze | ✅ | — | — |
 | *Until restart* lock | ✅ | ✅ (untested) | — |
 | Hardcore lock | ✅ | — | — |
-| Service ↔ app connection | Unix socket | Unix socket | named pipe client only |
+| Service ↔ app connection | Unix socket | Unix socket | named pipe (untested) |
 | Tray icon, running-app picker | ✅ | — | — |
 
-The macOS and Windows backends compile, but have never run on those systems. CI checks Windows (x64 and ARM); macOS is checked by hand for now.
-Each module's documentation lists what's still needed: for Windows, the named-pipe server comes
-first, because without it nothing can control the service.
+The Windows backend is checked in CI (x64 and ARM; the named pipe is tested there), but hasn't been
+used on a real machine much. The macOS backend compiles but has never run; CI doesn't check it while
+the repository is private. Each module's documentation lists what's still needed.
 
 ## Honest limitations
 

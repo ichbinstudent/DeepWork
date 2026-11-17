@@ -8,7 +8,6 @@ use deepwork_core::protocol::{Request, Response};
 
 use crate::state::Daemon;
 
-#[cfg_attr(windows, allow(dead_code))] // until the named pipe server exists
 /// Whether a caller with this user id may control the daemon. Root always
 /// may; `allowed = None` lets everyone in.
 pub fn permitted(uid: Option<u32>, allowed: Option<&[u32]>) -> bool {
@@ -21,7 +20,6 @@ pub fn permitted(uid: Option<u32>, allowed: Option<&[u32]>) -> bool {
 }
 
 /// Answer newline-delimited JSON requests until the client disconnects.
-#[cfg_attr(windows, allow(dead_code))] // until the named pipe server exists
 pub fn handle_conn(
     reader: impl Read,
     mut writer: impl Write,

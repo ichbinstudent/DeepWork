@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Build DeepWork and install it system-wide. Run as your normal user;
-# the script asks for sudo when it needs it.
+# Build DeepWork (or use the binaries of a release download) and install it
+# system-wide. Run as your normal user; the script asks for sudo when it
+# needs it.
 set -euo pipefail
 
 PREFIX="${PREFIX:-/usr/local}"
@@ -13,23 +14,28 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 
-# Find cargo even when rustup's shims aren't on PATH.
-if ! command -v cargo >/dev/null; then
-    for d in "$HOME/.cargo/bin" "$HOME"/.rustup/toolchains/stable-*/bin; do
-        [[ -x "$d/cargo" ]] && PATH="$d:$PATH" && break
-    done
-fi
-command -v cargo >/dev/null || { echo "cargo not found. Install Rust from https://rustup.rs" >&2; exit 1; }
-
 command -v nft >/dev/null || echo "Note: nftables (nft) isn't installed; encrypted-DNS blocking and HTTPS filtering will be unavailable." >&2
 
-echo "==> Building (release)…"
-cargo build --release --locked
+if [[ -x bin/deepwork-daemon && ! -f Cargo.toml ]]; then
+    # Unpacked release: the binaries are already built.
+    BUILT=bin
+else
+    # Find cargo even when rustup's shims aren't on PATH.
+    if ! command -v cargo >/dev/null; then
+        for d in "$HOME/.cargo/bin" "$HOME"/.rustup/toolchains/stable-*/bin; do
+            [[ -x "$d/cargo" ]] && PATH="$d:$PATH" && break
+        done
+    fi
+    command -v cargo >/dev/null || { echo "cargo not found. Install Rust from https://rustup.rs" >&2; exit 1; }
+    echo "==> Building (release)…"
+    cargo build --release --locked
+    BUILT=target/release
+fi
 
 echo "==> Installing to $PREFIX (needs sudo)…"
-sudo install -Dm755 target/release/deepwork "$BINDIR/deepwork"
-sudo install -Dm755 target/release/deepwork-daemon "$BINDIR/deepwork-daemon"
-sudo install -Dm755 target/release/deepworkctl "$BINDIR/deepworkctl"
+sudo install -Dm755 "$BUILT/deepwork" "$BINDIR/deepwork"
+sudo install -Dm755 "$BUILT/deepwork-daemon" "$BINDIR/deepwork-daemon"
+sudo install -Dm755 "$BUILT/deepworkctl" "$BINDIR/deepworkctl"
 sudo install -Dm644 data/io.github.ichbinstudent.DeepWork.desktop "$DATADIR/applications/io.github.ichbinstudent.DeepWork.desktop"
 sudo install -Dm644 assets/icon.svg "$DATADIR/icons/hicolor/scalable/apps/io.github.ichbinstudent.DeepWork.svg"
 sudo install -Dm644 data/io.github.ichbinstudent.DeepWork-autostart.desktop /etc/xdg/autostart/io.github.ichbinstudent.DeepWork-autostart.desktop

@@ -1,0 +1,229 @@
+//! The named pipe (`\\.\pipe\deepwork`) that the app and `deepworkctl` use.
+
+use std::ffi::c_void;
+use std::fs::File;
+use std::io;
+use std::os::windows::ffi::OsStrExt;
+use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
+use std::path::Path;
+use std::ptr::null_mut;
+use std::sync::{Arc, Mutex};
+
+use windows_sys::Win32::Foundation::{
+    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+};
+use windows_sys::Win32::Security::Authorization::{
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+};
+use windows_sys::Win32::Security::{
+    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsWellKnownSid,
+    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
+    TokenElevation, TokenUser, WinLocalSystemSid,
+};
+use windows_sys::Win32::Storage::FileSystem::{
+    FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
+};
+use windows_sys::Win32::System::Pipes::{
+    ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, GetNamedPipeClientProcessId,
+    PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES,
+    PIPE_WAIT,
+};
+use windows_sys::Win32::System::Threading::{
+    OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+
+use crate::server::{handle_conn, permitted};
+use crate::state::Daemon;
+
+/// SYSTEM and administrators get full access. Other signed-in users may read
+/// and write (`FILE_GENERIC_READ | FILE_WRITE_DATA`), but not create pipe
+/// instances, so nobody can pose as the service.
+const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012008b;;;AU)";
+
+/// Serve clients on the pipe at `path` until the process ends.
+pub fn serve(path: &Path, daemon: Arc<Mutex<Daemon>>, allowed: Option<Vec<u32>>) -> io::Result<()> {
+    let name: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let sddl: Vec<u16> = SDDL.encode_utf16().chain([0]).collect();
+    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
+    // SAFETY: valid NUL-terminated string and out pointer. The descriptor is
+    // used for every pipe instance and lives as long as the process.
+    if unsafe {
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            sddl.as_ptr(),
+            SDDL_REVISION_1,
+            &mut sd,
+            null_mut(),
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let sa = SECURITY_ATTRIBUTES {
+        nLength: size_of::<SECURITY_ATTRIBUTES>() as u32,
+        lpSecurityDescriptor: sd,
+        bInheritHandle: 0,
+    };
+
+    let mut first = true;
+    loop {
+        // The first instance must be ours: fail if someone else holds the name.
+        let open_mode = PIPE_ACCESS_DUPLEX
+            | if first {
+                FILE_FLAG_FIRST_PIPE_INSTANCE
+            } else {
+                0
+            };
+        // SAFETY: valid name and security attributes.
+        let h = unsafe {
+            CreateNamedPipeW(
+                name.as_ptr(),
+                open_mode,
+                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+                PIPE_UNLIMITED_INSTANCES,
+                64 * 1024,
+                64 * 1024,
+                0,
+                &sa,
+            )
+        };
+        if h == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        first = false;
+        // SAFETY: `h` is a fresh handle that we own from here on.
+        let pipe = unsafe { File::from_raw_handle(h as RawHandle) };
+        // SAFETY: valid pipe handle, synchronous mode.
+        let connected = unsafe { ConnectNamedPipe(h, null_mut()) } != 0
+            || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
+        if !connected {
+            continue;
+        }
+        let daemon = daemon.clone();
+        let allowed = allowed.clone();
+        std::thread::spawn(move || {
+            let ok = permitted(client_uid(&pipe), allowed.as_deref());
+            handle_conn(&pipe, &pipe, daemon, ok);
+            let h = pipe.as_raw_handle() as HANDLE;
+            // SAFETY: `pipe` still owns the handle.
+            unsafe {
+                FlushFileBuffers(h);
+                DisconnectNamedPipe(h);
+            }
+        });
+    }
+}
+
+/// The caller as a "user id": 0 (like root) for SYSTEM and elevated
+/// administrators, otherwise the last number of their user SID (the relative
+/// id that `whoami /user` ends with). `allowed_users` holds those numbers.
+fn client_uid(pipe: &File) -> Option<u32> {
+    // SAFETY: plain Win32 calls with valid out pointers; every handle we open
+    // is wrapped in an `OwnedHandle` so it gets closed.
+    unsafe {
+        let mut pid = 0u32;
+        if GetNamedPipeClientProcessId(pipe.as_raw_handle() as HANDLE, &mut pid) == 0 {
+            return None;
+        }
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return None;
+        }
+        let process = OwnedHandle::from_raw_handle(process as RawHandle);
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(process.as_raw_handle() as HANDLE, TOKEN_QUERY, &mut token) == 0 {
+            return None;
+        }
+        let token = OwnedHandle::from_raw_handle(token as RawHandle);
+        let token = token.as_raw_handle() as HANDLE;
+
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len = 0u32;
+        if GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut c_void,
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        ) != 0
+            && elevation.TokenIsElevated != 0
+        {
+            return Some(0);
+        }
+
+        // TOKEN_USER plus the SID it points to; u64s keep it aligned.
+        let mut buf = [0u64; 64];
+        if GetTokenInformation(
+            token,
+            TokenUser,
+            buf.as_mut_ptr() as *mut c_void,
+            size_of_val(&buf) as u32,
+            &mut len,
+        ) == 0
+        {
+            return None;
+        }
+        let sid = (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid;
+        if IsWellKnownSid(sid, WinLocalSystemSid) != 0 {
+            return Some(0);
+        }
+        let count = *GetSidSubAuthorityCount(sid);
+        if count == 0 {
+            return None;
+        }
+        Some(*GetSidSubAuthority(sid, u32::from(count) - 1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use deepwork_core::client::Client;
+    use deepwork_core::protocol::Capabilities;
+
+    use super::*;
+    use crate::state::Persisted;
+
+    #[test]
+    fn answers_over_the_pipe() {
+        let name = format!(r"\\.\pipe\deepwork-test-{}", std::process::id());
+        let daemon = Arc::new(Mutex::new(Daemon::new(
+            Persisted::default(),
+            String::new(),
+            Capabilities::all("Windows"),
+        )));
+        {
+            let name = name.clone();
+            std::thread::spawn(move || serve(Path::new(&name), daemon, None));
+        }
+        let client = Client::new(name.clone());
+        let mut status = None;
+        for _ in 0..100 {
+            match client.status() {
+                Ok(s) => {
+                    status = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            }
+        }
+        let status = status.expect("the pipe server never answered");
+        assert_eq!(status.capabilities.os, "Windows");
+        // Later connections get new pipe instances.
+        for _ in 0..3 {
+            client.status().unwrap();
+        }
+        // A second server can't take over the name.
+        let err = serve(
+            Path::new(&name),
+            Arc::new(Mutex::new(Daemon::new(
+                Persisted::default(),
+                String::new(),
+                Capabilities::all("Windows"),
+            ))),
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(5), "{err}"); // ERROR_ACCESS_DENIED
+    }
+}

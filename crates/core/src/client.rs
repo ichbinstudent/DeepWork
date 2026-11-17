@@ -57,12 +57,23 @@ fn connect(path: &str) -> Result<std::os::unix::net::UnixStream> {
 /// Open a connection to the daemon (named pipe).
 #[cfg(windows)]
 fn connect(path: &str) -> Result<std::fs::File> {
-    // A named pipe opens like a file; the server handles one request per line.
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .map_err(|e| ClientError::Unavailable(e.to_string()))
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+    // Read and write data, nothing more: that is all the service's pipe
+    // grants to normal users (FILE_GENERIC_READ | FILE_WRITE_DATA).
+    const ACCESS: u32 = 0x0012_008b;
+    // All pipe instances are taken; the service is about to create another.
+    const ERROR_PIPE_BUSY: i32 = 231;
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::fs::OpenOptions::new().access_mode(ACCESS).open(path) {
+            Ok(f) => return Ok(f),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(20))
+            }
+            Err(e) => return Err(ClientError::Unavailable(e.to_string())),
+        }
+    }
 }
 
 impl Client {
