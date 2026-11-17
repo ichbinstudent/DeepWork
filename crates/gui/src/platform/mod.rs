@@ -23,7 +23,8 @@ pub use fallback::{apps, tray};
 #[allow(dead_code)]
 mod fallback;
 
-/// Something the user picked in the tray menu.
+/// Something the user picked in the tray menu (no tray on some systems).
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Open(Option<&'static str>),
