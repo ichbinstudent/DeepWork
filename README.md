@@ -16,7 +16,7 @@
   <img src="docs/screenshots/focus.png" width="49%" alt="Focus page with a running, locked block">
   <img src="docs/screenshots/edit.png" width="49%" alt="Block editor with filter lists and websites">
   <img src="docs/screenshots/stats.png" width="49%" alt="Statistics page">
-  <img src="docs/screenshots/settings.png" width="49%" alt="Settings page in dark mode">
+  <img src="docs/screenshots/settings.png" width="49%" alt="Settings page with the network protections on">
 </p>
 
 Inspired by [Cold Turkey Blocker](https://getcoldturkey.com) (not affiliated). DeepWork enforces its
