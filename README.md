@@ -179,7 +179,8 @@ deepworkctl start Social 60
 
 Blocks and settings live in `C:\ProgramData\DeepWork`, which only administrators can change. Only
 the user who installed it (and administrators) may control the service; others can be added to
-`allowed_users` in `config.json` by the last number of their SID (`whoami /user`). Locks only stop
+`allowed_users` in `config.json` by the last number of their SID (`whoami /user`). The service logs
+to `C:\ProgramData\DeepWork\deepwork.log`. Locks only stop
 standard users: any administrator can end the scheduled task. `uninstall.ps1` removes it again
 (`-Purge` also deletes the data).
 

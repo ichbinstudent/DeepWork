@@ -50,6 +50,7 @@ pub fn platform(opts: &Options) -> Platform {
         opts.root.join("etc").join("hosts")
     } else {
         if let Some(base) = opts.state_dir.parent() {
+            log_to_file(&base.join("deepwork.log"));
             restrict_to_admins(base);
         }
         hosts_path()
@@ -98,6 +99,30 @@ impl System for WindowsSystem {
             spawn_quiet("ipconfig", &["/flushdns"]);
         }
     }
+}
+
+/// Send the service's messages (stderr) to a log file, since it runs
+/// without a console. The log starts over once it passes 1 MB.
+fn log_to_file(path: &Path) {
+    use std::os::windows::io::IntoRawHandle;
+    use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, SetStdHandle};
+
+    let full = std::fs::metadata(path).is_ok_and(|m| m.len() > 1 << 20);
+    let mut opts = std::fs::OpenOptions::new();
+    if full {
+        opts.write(true).truncate(true);
+    } else {
+        opts.append(true);
+    }
+    let Ok(file) = opts.create(true).open(path) else {
+        return;
+    };
+    // SAFETY: the handle is handed over to the process for good.
+    unsafe { SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle()) };
+    eprintln!(
+        "--- service started (Unix time {:.0})",
+        deepwork_core::now()
+    );
 }
 
 /// Let only SYSTEM and administrators change `dir` (state and config), and
