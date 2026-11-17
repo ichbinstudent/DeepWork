@@ -77,7 +77,7 @@ blocks from a root system service, so closing the app doesn't end a block.
 - **Notifications** when an app is blocked or a block starts or ends.
 - **Clock-change protection**: changing the system clock doesn't end blocks early.
 - **CLI**: `deepworkctl status | start <block> <min> | stop <block> | unlock <block> | freeze <min> | locked`,
-  and `deepworkctl add <name> [--lock none|random|strict] <site|@list>… | delete <block> | lists` to
+  and `deepworkctl add <name> [--lock none|random|strict] <site|list:ID>… | delete <block> | lists` to
   manage blocks without the app.
 
 ## Hardcore mode
@@ -159,7 +159,8 @@ while a block is locked or a freeze is running.
 ### Windows (experimental)
 
 Windows releases contain the service and `deepworkctl` for x64 and ARM; the app isn't available yet.
-Websites are blocked through the hosts file, plus Firefox's policies. Download
+Websites are blocked through the hosts file and browser policies (Chrome, Edge, Brave and Firefox),
+so proxy and VPN extensions in those browsers don't get around a block. Download
 `deepwork-<version>-windows-x64.zip` (or `-arm64`), unpack it, and in an administrator PowerShell:
 
 ```powershell
@@ -172,7 +173,7 @@ the service as SYSTEM from a scheduled task that starts with Windows. Then, in a
 
 ```powershell
 deepworkctl lists                         # built-in filter lists
-deepworkctl add Social --lock strict @social reddit.com
+deepworkctl add Social --lock strict list:social reddit.com
 deepworkctl start Social 60
 ```
 
@@ -229,7 +230,7 @@ the lock menu).
 | Feature | Linux | macOS | Windows |
 | --- | --- | --- | --- |
 | Website blocking (hosts file) | ✅ | ✅ (untested) | ✅ (untested) |
-| Browser policies | ✅ | Firefox only (untested) | Firefox only (untested) |
+| Browser policies | ✅ | Firefox only (untested) | ✅ registry + Firefox |
 | App blocking | ✅ | — | — |
 | Encrypted DNS / HTTPS filter / VPN blocking | ✅ | — | — |
 | Freeze | ✅ | — | — |

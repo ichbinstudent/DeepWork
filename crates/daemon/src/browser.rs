@@ -1,6 +1,6 @@
 //! Browser enterprise policies.
 //!
-//! Chromium-based browsers re-read policy files while running, so a URL
+//! Chromium-based browsers re-read their policies while running, so a URL
 //! blocklist takes effect immediately, covers all subdomains and shows a
 //! proper "blocked" page. Policies also turn off DNS-over-HTTPS so browsers
 //! can't route around the hosts file. Firefox reads its policies at start-up.
@@ -23,9 +23,17 @@ pub struct ChromiumFlavor {
     pub markers: &'static [&'static str],
 }
 
+/// Chromium policies kept somewhere other than JSON files (the Windows
+/// registry), with the same contents as [`chromium_policy`].
+pub trait PolicyStore: Send {
+    /// Block these domains; an empty set restores what was there before.
+    fn apply(&self, domains: &BTreeSet<String>) -> std::io::Result<()>;
+}
+
 /// Where browsers look for policies on an OS. Paths are absolute.
 pub struct Layout {
     pub chromium: &'static [ChromiumFlavor],
+    pub chromium_store: Option<Box<dyn PolicyStore>>,
     /// Firefox's `policies.json` and its install markers.
     pub firefox: Option<(&'static str, &'static [&'static str])>,
 }
@@ -130,6 +138,9 @@ impl Policies {
         {
             self.apply_firefox(policy, domains)?;
         }
+        if let Some(store) = &self.layout.chromium_store {
+            store.apply(domains)?;
+        }
         Ok(())
     }
 
@@ -159,6 +170,9 @@ impl Policies {
     pub fn cleanup(&self) -> std::io::Result<()> {
         for flavor in self.layout.chromium {
             let _ = fs::remove_file(self.path(flavor.dir).join(POLICY_FILE));
+        }
+        if let Some(store) = &self.layout.chromium_store {
+            store.apply(&BTreeSet::new())?;
         }
         let backup = self.firefox_backup();
         if let Some((policy, _)) = self.layout.firefox
@@ -211,6 +225,7 @@ mod tests {
         let p = Policies {
             layout: Layout {
                 chromium: &[],
+                chromium_store: None,
                 firefox: None,
             },
             root: "/sb".into(),

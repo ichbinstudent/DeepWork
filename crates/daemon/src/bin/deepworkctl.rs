@@ -15,8 +15,8 @@ const USAGE: &str = "usage: deepworkctl <command>
   freeze <min>           lock the whole computer for <min> minutes
   locked                 exit 0 if any block is locked or a freeze is running
   lists                  show the built-in filter lists
-  add <name> [--lock none|random|strict] <site|@list>...
-                         create a block, e.g. add Social @social reddit.com
+  add <name> [--lock none|random|strict] <site|list:ID>...
+                         create a block, e.g. add Social list:social reddit.com
   delete <block>         delete a block (if it isn't locked)
 
 <block> is a block's name or id.";
@@ -36,7 +36,7 @@ fn parse_add(name: &str, rest: &[&str]) -> Result<BlockConfig, String> {
                 Some("strict") => LockKind::Strict,
                 _ => return Err("--lock takes none, random or strict".into()),
             };
-        } else if let Some(id) = a.strip_prefix('@') {
+        } else if let Some(id) = a.strip_prefix("list:").or_else(|| a.strip_prefix('@')) {
             if lists::get(id).is_none() {
                 return Err(format!("no filter list “{id}” (see: deepworkctl lists)"));
             }
@@ -47,7 +47,7 @@ fn parse_add(name: &str, rest: &[&str]) -> Result<BlockConfig, String> {
         }
     }
     if cfg.websites.is_empty() && cfg.lists.is_empty() {
-        return Err("name at least one website or @list".into());
+        return Err("name at least one website or list:ID".into());
     }
     Ok(cfg)
 }
@@ -143,7 +143,7 @@ fn main() {
         ["lists"] => {
             for l in lists::LISTS {
                 println!(
-                    "@{:<12} {:<26} {} sites, {} apps",
+                    "list:{:<12} {:<26} {} sites, {} apps",
                     l.id,
                     l.name,
                     l.websites.len(),
@@ -189,14 +189,20 @@ mod tests {
     fn add_arguments() {
         let cfg = parse_add(
             "Social",
-            &["--lock", "strict", "@social", "https://www.Reddit.com/r/x"],
+            &[
+                "--lock",
+                "strict",
+                "list:social",
+                "https://www.Reddit.com/r/x",
+            ],
         )
         .unwrap();
         assert_eq!(cfg.lock, LockKind::Strict);
         assert_eq!(cfg.lists, ["social"]);
         assert_eq!(cfg.websites, ["reddit.com"]);
         assert!(parse_add("x", &[]).is_err());
-        assert!(parse_add("x", &["@nope"]).is_err());
+        assert!(parse_add("x", &["list:nope"]).is_err());
+        assert_eq!(parse_add("x", &["@chat"]).unwrap().lists, ["chat"]);
         assert!(parse_add("x", &["--lock", "hardcore", "a.com"]).is_err());
     }
 }

@@ -48,6 +48,7 @@ pub fn platform(opts: &Options) -> Platform {
         }),
         browsers: Some(Layout {
             chromium: CHROMIUM_FLAVORS,
+            chromium_store: None,
             firefox: Some((FIREFOX_POLICY, FIREFOX_MARKERS)),
         }),
         processes: Some(Box::new(procs::ProcFs)),

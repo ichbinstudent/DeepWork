@@ -39,6 +39,7 @@ pub fn platform(opts: &Options) -> Platform {
         }),
         browsers: Some(Layout {
             chromium: &[],
+            chromium_store: None,
             firefox: Some((
                 "/Applications/Firefox.app/Contents/Resources/distribution/policies.json",
                 &["/Applications/Firefox.app"],

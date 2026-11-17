@@ -1,5 +1,6 @@
-//! Windows (experimental): website blocking through the hosts file, Firefox
-//! policies, and the named pipe the app and `deepworkctl` talk to. The
+//! Windows (experimental): website blocking through the hosts file and
+//! browser policies (Chrome, Edge, Brave and Chromium in the registry,
+//! Firefox's `policies.json`), and the named pipe the app and `deepworkctl` talk to. The
 //! service runs as SYSTEM from a scheduled task (see `windows/install.ps1`).
 //!
 //! Still to do, roughly in order:
@@ -8,8 +9,6 @@
 //! - apps ([`ProcessTable`](super::ProcessTable)): Toolhelp32 snapshots,
 //!   `QueryFullProcessImageNameW`, `TerminateProcess`; Store apps by
 //!   package family name.
-//! - browsers: Chromium-based browsers read policies from the registry
-//!   (`HKLM\SOFTWARE\Policies\Google\Chrome\URLBlocklist`, Edge, Brave…).
 //! - freeze: `LockWorkStation` from a helper in the user's session.
 //! - boot id: `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters\BootId`.
 //! - network ([`NetGuard`](super::NetGuard)): Windows Filtering Platform for
@@ -22,8 +21,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use super::{Options, Paths, Platform, System, spawn_quiet};
-use crate::browser::Layout;
+use crate::browser::{Layout, PolicyStore};
 
+mod chromium;
 mod pipe;
 pub use pipe::serve;
 
@@ -62,6 +62,16 @@ pub fn platform(opts: &Options) -> Platform {
         }),
         browsers: Some(Layout {
             chromium: &[],
+            chromium_store: (!opts.sandbox).then(|| {
+                Box::new(chromium::RegistryPolicies {
+                    hive: chromium::Hive::Machine,
+                    keys: chromium::BROWSER_KEYS
+                        .iter()
+                        .map(|k| k.to_string())
+                        .collect(),
+                    backup: opts.state_dir.join("chromium-registry.orig.json"),
+                }) as Box<dyn PolicyStore>
+            }),
             firefox: Some((
                 r"C:\Program Files\Mozilla Firefox\distribution\policies.json",
                 &[r"C:\Program Files\Mozilla Firefox\firefox.exe"],

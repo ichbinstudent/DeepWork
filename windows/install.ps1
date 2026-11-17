@@ -47,5 +47,5 @@ if (($path -split ';') -notcontains $dir) {
 
 Write-Host 'DeepWork is installed and running. Open a new terminal and try:'
 Write-Host '  deepworkctl status'
-Write-Host '  deepworkctl add Social @social'
+Write-Host '  deepworkctl add Social list:social'
 Write-Host '  deepworkctl start Social 60'
