@@ -32,14 +32,14 @@ $dir = Join-Path $env:ProgramFiles 'DeepWork'
 $data = Join-Path $env:ProgramData 'DeepWork'
 $task = 'DeepWork'
 
-Write-Host 'Stopping a running copy…'
+Write-Host 'Stopping a running copy...'
 if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName $task
 }
 Get-Process deepwork, deepwork-daemon -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Milliseconds 500
 
-Write-Host "Copying the programs to $dir…"
+Write-Host "Copying the programs to $dir..."
 New-Item -ItemType Directory -Force $dir | Out-Null
 Get-ChildItem $PSScriptRoot -Exclude '*.ps1', '*.cmd', 'README.md', 'LICENSE' |
     Copy-Item -Destination $dir -Recurse -Force
@@ -54,7 +54,7 @@ if (-not (Test-Path $config)) {
     Set-Content -Encoding ascii -Path $config -Value "{`r`n  `"allowed_users`": [$rid]`r`n}"
 }
 
-Write-Host 'Starting the service…'
+Write-Host 'Starting the service...'
 # The service runs as SYSTEM from a scheduled task: at start-up, and every
 # five minutes in case it isn't running (a running copy is left alone).
 $action = New-ScheduledTaskAction -Execute (Join-Path $dir 'deepwork-daemon.exe')

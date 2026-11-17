@@ -44,7 +44,7 @@ if (Test-Path $ctl) {
     }
 }
 
-Write-Host 'Stopping the service…'
+Write-Host 'Stopping the service...'
 if (Get-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue) {
     Stop-ScheduledTask -TaskName $task
     Unregister-ScheduledTask -TaskName $task -Confirm:$false
@@ -56,7 +56,7 @@ Start-Sleep -Milliseconds 500
 $daemon = Join-Path $dir 'deepwork-daemon.exe'
 if (Test-Path $daemon) { & $daemon --cleanup }
 
-Write-Host 'Removing the programs…'
+Write-Host 'Removing the programs...'
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
 Remove-Item -Force (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk') -ErrorAction SilentlyContinue
 $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')

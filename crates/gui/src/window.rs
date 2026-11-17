@@ -300,7 +300,6 @@ pub fn build(
     update();
     store.subscribe(update);
 
-    #[cfg(debug_assertions)]
     debug_hooks(&ctx);
 
     window.connect_close_request(move |w| {
@@ -316,7 +315,7 @@ pub fn build(
 
 /// Development aid: `DEEPWORK_DEBUG_PAGE=stats`, `DEEPWORK_DEBUG_OPEN=edit|start|unlock|apps|new`
 /// and `DEEPWORK_DEBUG_SHOT=/path.png` render the window to a PNG and quit.
-#[cfg(debug_assertions)]
+/// Kept in release builds so CI can take screenshots of the real program.
 fn debug_hooks(ctx: &Rc<Ctx>) {
     use gtk::glib;
     if let Some((w, h)) = std::env::var("DEEPWORK_DEBUG_SIZE").ok().and_then(|s| {

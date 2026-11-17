@@ -68,7 +68,8 @@ Check ((Get-Content $hosts -Raw) -match '0\.0\.0\.0\s+example\.com') 'hosts file
 Check ((Blocklist) -contains 'example.com') 'Chrome blocklist has example.com'
 Check ((Get-ItemProperty $chrome).DnsOverHttpsMode -eq 'off') "Chrome's secure DNS is off"
 Check ((Get-Acl $data).Owner -match 'Administrators|S-1-5-32-544') 'data folder belongs to administrators'
-Check (Test-Path "$data\deepwork.log") 'the service writes a log'
+Check ((Get-Content "$data\deepwork.log" -Raw) -match 'service started') 'the service writes a readable log'
+Check ((Get-Content "$data\state\state.json" -Raw) -match 'example.com') 'administrators can read the state'
 
 if ($App) {
     $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk'

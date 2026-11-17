@@ -59,6 +59,10 @@ jobs:
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
             foreach ($e in $errors) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad = $true }
+            # Windows PowerShell 5.1 reads scripts without a BOM as ANSI.
+            if ((Get-Content $f -Raw -Encoding UTF8) -match '[^\x00-\x7F]') {
+              Write-Host "$($f.Name): use ASCII only (Windows PowerShell misreads other characters)"; $bad = $true
+            }
           }
           if ($bad) { exit 1 }
       # Windows on ARM: compile-checked from the x64 runner (ARM runners
@@ -91,13 +95,6 @@ jobs:
         run: |
           cargo build --release --locked -p deepwork
           .github/scripts/bundle-windows-app.sh app-bundle
-      - name: Try the app inside MSYS2
-        shell: msys2 {0}
-        continue-on-error: true
-        run: |
-          mkdir -p "$RUNNER_TEMP/shots"
-          DEEPWORK_DEBUG_SHOT="$(cygpath -w "$RUNNER_TEMP/shots/msys2.png")" DEEPWORK_DEBUG_PAGE=settings \
-            timeout 60 ./target-gnu/release/deepwork.exe; echo "exit status $?"
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
       - name: End-to-end test

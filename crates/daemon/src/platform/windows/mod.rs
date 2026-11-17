@@ -50,8 +50,8 @@ pub fn platform(opts: &Options) -> Platform {
         opts.root.join("etc").join("hosts")
     } else {
         if let Some(base) = opts.state_dir.parent() {
-            log_to_file(&base.join("deepwork.log"));
             restrict_to_admins(base);
+            log_to_file(&base.join("deepwork.log"));
         }
         hosts_path()
     };
@@ -129,35 +129,35 @@ fn log_to_file(path: &Path) {
 /// make administrators its owner, so nobody else can edit the blocks or the
 /// list of allowed users. Normal users may still read it.
 fn restrict_to_admins(dir: &Path) {
-    let dir = dir.as_os_str();
-    // Well-known SIDs, so this works in every language: SYSTEM,
-    // Administrators, Users.
-    let steps: [&[&str]; 2] = [
-        &["/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"],
-        &[
-            "/inheritance:r",
-            "/grant:r",
-            "*S-1-5-18:(OI)(CI)F",
-            "*S-1-5-32-544:(OI)(CI)F",
-            "*S-1-5-32-545:(OI)(CI)RX",
-            "/T",
-            "/C",
-            "/Q",
-        ],
-    ];
-    for args in steps {
-        let ok = Command::new("icacls")
-            .arg(dir)
+    let icacls = |target: &Path, args: &[&str]| {
+        Command::new("icacls")
+            .arg(target)
             .args(args)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .is_ok_and(|s| s.success());
-        if !ok {
-            eprintln!(
-                "deepwork: cannot restrict access to {}",
-                Path::new(dir).display()
-            );
-        }
+            .is_ok_and(|s| s.success())
+    };
+    // Well-known SIDs, so this works in every language: SYSTEM,
+    // Administrators, Users. The rules go on the folder only; everything
+    // inside is reset to inherit them (folder rules on a file would leave
+    // the file with no access at all).
+    let ok = icacls(dir, &["/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"])
+        && icacls(
+            dir,
+            &[
+                "/inheritance:r",
+                "/grant:r",
+                "*S-1-5-18:(OI)(CI)F",
+                "*S-1-5-32-544:(OI)(CI)F",
+                "*S-1-5-32-545:(OI)(CI)RX",
+                "/C",
+                "/Q",
+            ],
+        );
+    if !ok {
+        eprintln!("deepwork: cannot restrict access to {}", dir.display());
     }
+    // Fails harmlessly when the folder is still empty.
+    icacls(&dir.join("*"), &["/reset", "/T", "/C", "/Q"]);
 }
