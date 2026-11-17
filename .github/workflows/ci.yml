@@ -50,6 +50,17 @@ jobs:
         run: cargo clippy -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
       - name: Test
         run: cargo test -p deepwork-core -p deepwork-daemon --locked
+      - name: Check PowerShell scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bad = $false
+          foreach ($f in Get-ChildItem windows/*.ps1, .github/scripts/*.ps1) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            foreach ($e in $errors) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad = $true }
+          }
+          if ($bad) { exit 1 }
       # Windows on ARM: compile-checked from the x64 runner (ARM runners
       # are only free for public repositories).
       - name: Clippy (Windows on ARM)
@@ -57,3 +68,36 @@ jobs:
         run: |
           rustup target add aarch64-pc-windows-msvc
           cargo clippy --target aarch64-pc-windows-msvc -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
+
+  # The GTK app for Windows (built with MSYS2), then an end-to-end test of
+  # the whole package: install, block, check, uninstall, with screenshots.
+  windows-app:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          cache: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-rust
+            mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-librsvg mingw-w64-ucrt-x86_64-adwaita-icon-theme
+      - name: Build and bundle the app
+        shell: msys2 {0}
+        env:
+          CARGO_TARGET_DIR: target-gnu
+        run: |
+          cargo build --release --locked -p deepwork
+          .github/scripts/bundle-windows-app.sh app-bundle
+      - name: Build the service
+        run: cargo build --release --locked -p deepwork-daemon
+      - name: End-to-end test
+        shell: pwsh
+        run: ./.github/scripts/windows-e2e.ps1 -App app-bundle
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-app-screenshots
+          path: ${{ runner.temp }}/shots

@@ -1,5 +1,8 @@
 //! DeepWork — GTK4/libadwaita front-end.
 
+// No console window behind the app on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod apps;
 mod dialogs;
 mod editor;
@@ -121,7 +124,34 @@ impl App {
     }
 }
 
+/// The Windows build carries GTK's image loaders next to the program. The
+/// loader list needs absolute paths, so it's written from a template at
+/// start-up (`@LOADERS_DIR@` stands for the loaders' folder).
+#[cfg(windows)]
+fn use_bundled_image_loaders() {
+    if std::env::var_os("GDK_PIXBUF_MODULE_FILE").is_some() {
+        return;
+    }
+    let Some(dir) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|d| d.join(r"lib\gdk-pixbuf-2.0\2.10.0")))
+    else {
+        return;
+    };
+    let Ok(template) = std::fs::read_to_string(dir.join("loaders.cache.in")) else {
+        return;
+    };
+    let loaders = dir.join("loaders").to_string_lossy().replace('\\', "/");
+    let cache = std::env::temp_dir().join("deepwork-pixbuf-loaders.cache");
+    if std::fs::write(&cache, template.replace("@LOADERS_DIR@", &loaders)).is_ok() {
+        // SAFETY: nothing else runs yet.
+        unsafe { std::env::set_var("GDK_PIXBUF_MODULE_FILE", cache) };
+    }
+}
+
 fn main() -> glib::ExitCode {
+    #[cfg(windows)]
+    use_bundled_image_loaders();
     gio::resources_register_include!("deepwork.gresource").expect("embedded resources");
 
     let background = std::env::args().any(|a| a == "--background");

@@ -8,6 +8,49 @@ use deepwork_core::model::Settings;
 
 use crate::window::Ctx;
 
+/// What DeepWork can't stop on this OS.
+#[cfg(not(windows))]
+const LIMITS: &[(&str, &str)] = &[
+    (
+        "Administrator access",
+        "Anyone with sudo can stop the service, except while a hardcore block runs. Locks \
+         make giving up harder, not impossible.",
+    ),
+    (
+        "Booting something else",
+        "Even hardcore mode can't stop a live USB stick or an edited boot menu. A firmware \
+         (BIOS) password and a boot loader password close that gap.",
+    ),
+    (
+        "VPNs, proxies and Tor",
+        "Apps that tunnel all traffic elsewhere bypass local blocking. Block those apps if they tempt you.",
+    ),
+    (
+        "Encrypted Client Hello",
+        "Some sites hide their name from the filter when the browser uses encrypted DNS. Blocking \
+         encrypted DNS prevents most of this.",
+    ),
+];
+
+/// What DeepWork can't stop on this OS.
+#[cfg(windows)]
+const LIMITS: &[(&str, &str)] = &[
+    (
+        "Administrator access",
+        "Any administrator can stop the service or edit the hosts file. Locks make giving up \
+         harder, not impossible. Use a standard account day to day to make it harder still.",
+    ),
+    (
+        "Other browsers",
+        "Chrome, Edge, Brave and Firefox block sites through their policies, even behind a VPN \
+         extension. Other browsers rely on the hosts file, which VPNs and proxies get around.",
+    ),
+    (
+        "VPN and proxy apps",
+        "Apps that tunnel all traffic elsewhere bypass the hosts file. Block those websites too.",
+    ),
+];
+
 pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
     let header = adw::HeaderBar::new();
     let content = gtk::Box::new(gtk::Orientation::Vertical, 24);
@@ -62,27 +105,7 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
     let limits = adw::PreferencesGroup::builder()
         .title("What can still get through")
         .build();
-    for (title, text) in [
-        (
-            "Administrator access",
-            "Anyone with sudo can stop the service, except while a hardcore block runs. Locks \
-             make giving up harder, not impossible.",
-        ),
-        (
-            "Booting something else",
-            "Even hardcore mode can't stop a live USB stick or an edited boot menu. A firmware \
-             (BIOS) password and a boot loader password close that gap.",
-        ),
-        (
-            "VPNs, proxies and Tor",
-            "Apps that tunnel all traffic elsewhere bypass local blocking. Block those apps if they tempt you.",
-        ),
-        (
-            "Encrypted Client Hello",
-            "Some sites hide their name from the filter when the browser uses encrypted DNS. Blocking \
-             encrypted DNS prevents most of this.",
-        ),
-    ] {
+    for &(title, text) in LIMITS {
         let row = adw::ActionRow::builder()
             .title(title)
             .subtitle(text)

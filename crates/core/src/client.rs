@@ -43,11 +43,23 @@ impl Default for Client {
     }
 }
 
+/// Explain why the service can't be reached in words a user can act on.
+fn unreachable(e: std::io::Error) -> ClientError {
+    use std::io::ErrorKind;
+    let msg = match e.kind() {
+        ErrorKind::NotFound | ErrorKind::ConnectionRefused => {
+            "the service isn't running. Is DeepWork installed?".to_string()
+        }
+        ErrorKind::PermissionDenied => "you aren't allowed to connect to it".to_string(),
+        _ => e.to_string(),
+    };
+    ClientError::Unavailable(msg)
+}
+
 /// Open a connection to the daemon (Unix socket).
 #[cfg(unix)]
 fn connect(path: &str) -> Result<std::os::unix::net::UnixStream> {
-    let stream = std::os::unix::net::UnixStream::connect(path)
-        .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+    let stream = std::os::unix::net::UnixStream::connect(path).map_err(unreachable)?;
     use std::time::Duration;
     stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
     stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
@@ -71,7 +83,7 @@ fn connect(path: &str) -> Result<std::fs::File> {
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20))
             }
-            Err(e) => return Err(ClientError::Unavailable(e.to_string())),
+            Err(e) => return Err(unreachable(e)),
         }
     }
 }

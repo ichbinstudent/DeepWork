@@ -154,7 +154,18 @@ fn main() {
         ["add", name, rest @ ..] => {
             let cfg = parse_add(name, rest).unwrap_or_else(|e| fail(&e));
             let id = client.create_block(cfg, None).unwrap_or_else(|e| fail(&e));
-            println!("Created “{name}” [{id}]. Start it with: deepworkctl start {id} <minutes>");
+            // Refer to it by name when that is unambiguous and easy to type.
+            let same = status()
+                .blocks
+                .iter()
+                .filter(|b| b.config.name.eq_ignore_ascii_case(name))
+                .count();
+            let key = if same == 1 && !name.contains(char::is_whitespace) {
+                name.to_string()
+            } else {
+                id.clone()
+            };
+            println!("Created “{name}” [{id}]. Start it with: deepworkctl start {key} <minutes>");
         }
         ["delete", key] => {
             let s = status();

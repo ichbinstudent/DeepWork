@@ -1,7 +1,9 @@
 //! Chromium policies in the Windows registry. Chrome, Edge, Brave and
-//! Chromium read them from `HKLM\SOFTWARE\Policies\<vendor>` and notice
-//! changes while running. The URL blocklist is enforced inside the browser,
-//! so proxy and VPN extensions can't get around it.
+//! Chromium read them from `HKLM\SOFTWARE\Policies\<vendor>` and re-read
+//! them when Windows announces a policy refresh (otherwise only every 15
+//! minutes), so every change is followed by one. The URL blocklist is
+//! enforced inside the browser, so proxy and VPN extensions can't get around
+//! it.
 //!
 //! Whatever was there before is saved on first use and restored when no
 //! websites are blocked any more; existing blocklist entries are kept.
@@ -15,6 +17,7 @@ use std::ptr::{null, null_mut};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+use windows_sys::Win32::System::GroupPolicy::{RP_FORCE, RefreshPolicyEx};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, KEY_WRITE, REG_DWORD,
     REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyExW, RegDeleteTreeW,
@@ -73,6 +76,25 @@ struct Backup {
 
 impl PolicyStore for RegistryPolicies {
     fn apply(&self, domains: &BTreeSet<String>) -> io::Result<()> {
+        let result = self.write(domains);
+        if let Hive::Machine = self.hive {
+            announce_policy_change();
+        }
+        result
+    }
+}
+
+/// Tell running browsers to re-read their policies now. Runs in the
+/// background: a policy refresh can take a moment.
+fn announce_policy_change() {
+    std::thread::spawn(|| {
+        // SAFETY: no pointers involved.
+        unsafe { RefreshPolicyEx(1, RP_FORCE) };
+    });
+}
+
+impl RegistryPolicies {
+    fn write(&self, domains: &BTreeSet<String>) -> io::Result<()> {
         if domains.is_empty() {
             return self.restore();
         }
@@ -113,9 +135,7 @@ impl PolicyStore for RegistryPolicies {
         }
         Ok(())
     }
-}
 
-impl RegistryPolicies {
     fn read_backup(&self) -> Option<Backup> {
         serde_json::from_str(&fs::read_to_string(&self.backup).ok()?).ok()
     }
