@@ -1,5 +1,254 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center"><img src="assets/icon.svg" width="96" height="96" alt=""></p>
 
-# DeepWork
+<h1 align="center">DeepWork</h1>
 
-Created in [T3 Code](https://t3.codes).
+<p align="center">
+  A website and app blocker for Linux with a GTK4 / libadwaita interface.<br>
+  Block distractions on demand or on a schedule, and lock yourself in so you can't give up halfway through.
+</p>
+
+<p align="center">
+  <a href="https://github.com/ichbinstudent/deepwork/actions/workflows/ci.yml"><img src="https://github.com/ichbinstudent/deepwork/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue" alt="License: GPL-3.0-or-later"></a>
+</p>
+
+<p align="center">
+  <img src="docs/screenshots/focus.png" width="49%" alt="Focus page with a running, locked block">
+  <img src="docs/screenshots/edit.png" width="49%" alt="Block editor with filter lists and websites">
+  <img src="docs/screenshots/stats.png" width="49%" alt="Statistics page">
+  <img src="docs/screenshots/settings.png" width="49%" alt="Settings page in dark mode">
+</p>
+
+Inspired by [Cold Turkey Blocker](https://getcoldturkey.com) (not affiliated). DeepWork enforces its
+blocks from a root system service, so closing the app doesn't end a block.
+
+## Features
+
+- **Blocks**: named sets of websites and applications, each with its own color, schedule and lock.
+- **Website blocking** in every browser through `/etc/hosts`. In Chrome, Chromium, Brave, Edge and
+  Vivaldi it also uses an enterprise URL blocklist, so all subdomains are covered right away and the
+  browser shows a proper "blocked" page. DNS-over-HTTPS is turned off so browsers can't get around
+  the block. Firefox gets the same policies at its next start.
+- **Encrypted DNS blocking** (on by default): while websites are blocked, well-known DNS-over-HTTPS/TLS
+  servers are blocked by name and address for your apps. Browsers can't look up blocked sites
+  around `/etc/hosts`. System services (e.g. systemd-resolved with DNS over TLS) are not affected.
+- **HTTPS filtering** (optional, Settings page): while websites are blocked, your web traffic goes
+  through a filter inside the service. It reads the site name of each connection (TLS SNI or HTTP
+  `Host`) and refuses blocked sites. Nothing is decrypted and no certificate is installed.
+  It works for any browser or app, including Flatpaks, custom DNS and direct IP addresses.
+  Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while filtering so
+  browsers fall back to filterable HTTPS.
+- **App blocking**: blocked apps are closed as soon as they start. You can match an app by process
+  name, executable path, or desktop/Flatpak app id. A picker lists installed and running apps.
+  `cmd:<text>` rules match the full command line, e.g. `cmd:net.minecraft.client.main.Main` catches
+  Minecraft whichever launcher started it.
+- **Filter lists**: 15 ready-made lists of websites *and* apps:
+  - Social media, Chat & messaging (Discord, Telegram, Signal, Slack…), Video & streaming
+  - Music streaming, Games (Steam, Lutris, Heroic, plus Minecraft: Modrinth, Prism, CurseForge,
+    ATLauncher, GDLauncher, MultiMC, PolyMC, HMCL, TLauncher… and the game itself), News, Shopping, Email
+  - AI chatbots, Rabbit holes (wikis, IMDb…), Dating, Gambling, Adult content
+  - VPNs & proxies (VPN apps, Tor, web proxy sites)
+  - Web browsers (close every browser for offline work)
+
+  A block includes a list by reference, so lists get new entries when DeepWork is updated.
+  While a block is locked, lists can be added but not removed.
+- **Import** your own website lists from a file: plain domains, hosts files (`0.0.0.0 example.com`)
+  or adblock rules (`||example.com^`). Up to 20,000 websites per block.
+- **Weekly schedule**: drag across a 7-day × 30-minute grid to choose when a block turns on.
+- **Locks**:
+  - *Random text*: type N random characters to unlock (pasting is disabled)
+  - *Password*: somebody else keeps the password
+  - *Until restart*: unlocks only after a reboot
+  - *Strict*: no way out until the time is up
+  - *Hardcore*: strict, and nobody gets administrator rights while it runs (see below)
+  - *Protect settings until a date*: no stopping, deleting or weakening the block before then
+- **Locked means locked**: while a block is locked you can add sites, apps and schedule time, but
+  you can't remove anything, shorten anything or change the lock. The rules are enforced by the
+  service, not just hidden in the interface.
+- **Breaks**: a daily allowance of minutes you may pause a block (even a locked one), and optional
+  Pomodoro cycles (e.g. 25 minutes on, 5 minutes off).
+- **Freeze**: lock the whole computer for a while. The screen keeps re-locking until the timer ends.
+- **Statistics**: focus time per day, streaks, and the apps that were blocked most.
+- **Top-bar indicator** with a live countdown and a menu to start blocks, add time,
+  take a break, unlock, freeze, or open the app. The icon shows whether DeepWork is idle,
+  blocking, locked, on a break, frozen, or the service is offline. On GNOME this needs the
+  [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/).
+  KDE and most other desktops support it out of the box. The countdown can be hidden from the menu.
+- **Notifications** when an app is blocked or a block starts or ends.
+- **Clock-change protection**: changing the system clock doesn't end blocks early.
+- **CLI**: `deepworkctl status | start <block> <min> | stop <block> | freeze <min> | locked`.
+
+## Hardcore mode
+
+The other locks stop you from giving up inside DeepWork, but anyone with `sudo` can still stop the
+service. A block with the **Hardcore** lock closes that gap while it runs:
+
+- **No administrator rights for anyone.** A sudoers drop-in denies every `sudo` command (root
+  itself excepted), `doas` gets a `deny` section, polkit asks for root's password for any admin
+  action and refuses `pkexec`, `run0`, `systemctl`, package installs and clock changes outright,
+  and root's password is locked so `su` and root logins fail.
+- **No tunnels.** Traffic through VPN interfaces (WireGuard, tun, IP-in-IP, GRE) is refused, and the
+  *VPNs & proxies* list is always included.
+- **Network protections always on.** Encrypted-DNS blocking and HTTPS filtering are on whatever the
+  Settings page says.
+- **Strict.** There's no unlocking, and restarting the computer doesn't end it.
+
+Everything is undone the moment the block ends, including root's password if it was locked. As a
+safety net, a systemd timer (`deepwork-hardcore-release.timer`) runs a small shell script that gives
+the rights back a minute after the deadline, even if the DeepWork service is broken.
+
+To make sure administrator rights always come back for updates, a hardcore session can last at
+most 7 days, and hardcore schedules must leave some time free every week. The block editor asks for
+confirmation and warns if you're in a group such as `docker` that can still get root.
+
+## Install
+
+DeepWork needs systemd, GTK ≥ 4.14, libadwaita ≥ 1.7 and Rust ≥ 1.92 (via [rustup](https://rustup.rs)).
+`nftables` is needed for the encrypted-DNS blocking and HTTPS filtering.
+
+| Distribution | Build dependencies |
+| --- | --- |
+| Arch, CachyOS, Manjaro | `sudo pacman -S --needed base-devel gtk4 libadwaita nftables` |
+| Fedora 42+ | `sudo dnf install gcc pkgconf-pkg-config gtk4-devel libadwaita-devel nftables` |
+| Debian 13+, Ubuntu 25.04+ | `sudo apt install build-essential pkg-config libgtk-4-dev libadwaita-1-dev nftables` |
+
+Then, as your normal user (not root):
+
+```sh
+git clone https://github.com/ichbinstudent/deepwork.git
+cd deepwork
+./install.sh          # builds, then uses sudo to install into /usr/local and start the service
+```
+
+Only the user who ran `install.sh` (and root) may control the service. To allow others, add their
+user ids (`id -u <name>`) to `allowed_users` in `/etc/deepwork/config.json` and run
+`sudo systemctl restart deepwork`.
+
+This installs:
+
+| What | Where |
+| --- | --- |
+| `deepwork` (app), `deepwork-daemon`, `deepworkctl` | `/usr/local/bin` |
+| systemd service `deepwork.service` (runs as root) | `/etc/systemd/system` |
+| desktop entry and icon | `/usr/local/share` |
+| top-bar indicator autostart (`deepwork --background`) | `/etc/xdg/autostart` |
+| who may control the service | `/etc/deepwork/config.json` (`allowed_users`) |
+| blocks and statistics | `/var/lib/deepwork/state.json` |
+
+To remove it, run `./uninstall.sh`. Add `--purge` to also delete your data. Uninstalling is refused
+while a block is locked or a freeze is running.
+
+## How it works
+
+```
+ deepwork (GTK app) ──┐
+ deepworkctl (CLI) ───┴── JSON over /run/deepwork/deepwork.sock ──► deepwork-daemon (root)
+                                                                     ├─ /etc/hosts section
+                                                                     ├─ Chromium / Firefox policy files
+                                                                     ├─ closes blocked processes
+                                                                     ├─ nftables table `inet deepwork`
+                                                                     │   (encrypted DNS, web redirect)
+                                                                     ├─ SNI / Host filter on 127.0.0.1
+                                                                     └─ loginctl lock-sessions (freeze)
+```
+
+- `crates/core`: data model, the locking and weakening rules, schedule maths and the wire protocol.
+  Pure and unit-tested.
+- `crates/daemon`: the privileged service. It runs the rules once a second, owns all state, and
+  checks who is calling by the kernel's peer credentials.
+- `crates/gui`: the libadwaita app and the top-bar indicator. It polls the daemon and never touches
+  the system itself. While the indicator is up, closing the window keeps DeepWork running in the top
+  bar; *Quit* in the menu exits it. Blocking carries on either way.
+
+### Platforms
+
+Everything that depends on the operating system sits behind traits in
+`crates/daemon/src/platform/` (and `crates/gui/src/platform/` for the tray icon and app discovery).
+The rules, state, schedules, hosts file format, browser policy contents, process matching and the
+protocol are shared.
+
+| Trait | What it does | Linux |
+| --- | --- | --- |
+| `System` | hosts file, DNS cache, cutting connections, screen lock, boot id | `/etc/hosts`, `resolvectl`, `ss -K`, `loginctl` |
+| `ProcessTable` | list and close processes | `/proc`, signals |
+| `NetGuard` | encrypted DNS, web filter, VPN tunnels | nftables + transparent SNI filter |
+| `AdminLockout` | hardcore mode | sudoers, doas, polkit, root password |
+| `Layout` (data) | where browsers read policies | Chromium JSON dirs, Firefox `policies.json` |
+
+Each OS module builds a `Platform` from the pieces it has; a missing piece means the feature isn't
+available there. The service reports this as `capabilities` in its status, refuses unsupported
+requests, and the app hides or disables them (for example, unsupported lock types don't appear in
+the lock menu).
+
+| Feature | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Website blocking (hosts file) | ✅ | ✅ (untested) | ✅ (untested) |
+| Browser policies | ✅ | Firefox only (untested) | Firefox only (untested) |
+| App blocking | ✅ | — | — |
+| Encrypted DNS / HTTPS filter / VPN blocking | ✅ | — | — |
+| Freeze | ✅ | — | — |
+| *Until restart* lock | ✅ | ✅ (untested) | — |
+| Hardcore lock | ✅ | — | — |
+| Service ↔ app connection | Unix socket | Unix socket | named pipe client only |
+| Tray icon, running-app picker | ✅ | — | — |
+
+The macOS and Windows backends compile and are checked in CI, but have never run on those systems.
+Each module's documentation lists what's still needed: for Windows, the named-pipe server comes
+first, because without it nothing can control the service.
+
+## Honest limitations
+
+Anyone with root access can stop the service or edit `/etc/hosts`. The service restarts when killed,
+re-applies the hosts file every few seconds, and keeps its entries while it's stopped. That puts real
+friction in the way of quitting, but it can't make bypassing impossible on a machine you administer,
+unless a hardcore block is running. Other limits:
+
+- VPN apps, proxies and Tor tunnel traffic past local blocking. Block those apps if needed.
+- With HTTPS filtering, a browser that uses Encrypted Client Hello hides the real site name. ECH
+  needs encrypted DNS, which DeepWork blocks, so this is rare. Browsers can also reuse an existing
+  connection for a sibling domain on the same server (e.g. Google sites). Chrome's URL blocklist
+  still covers Chrome.
+- The firewall rules only exist while websites are blocked. They are removed when the service stops,
+  so a crashed service never leaves your connection broken.
+- `/etc/hosts` has no wildcards. Each blocked site also covers common subdomains (`www.`, `m.`,
+  `old.`, …). Chromium-based browsers block all subdomains through policy.
+- Firefox reads policies only at start-up, so its URL filter takes effect after a restart. The
+  hosts file works immediately.
+- App blocking only covers processes owned by regular users, and never core desktop or system
+  processes.
+- Hardcore mode can't stop someone who boots a live USB stick or edits the kernel command line in
+  the boot menu. Set a firmware (BIOS) password and a boot loader password to close that. Members
+  of groups such as `docker` or `disk` can also still get root.
+
+## Development
+
+```sh
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
+
+# Run the service unprivileged in a sandbox and point the app at it:
+cargo run -p deepwork-daemon -- --sandbox /tmp/dw --socket /tmp/dw.sock &
+DEEPWORK_SOCKET=/tmp/dw.sock cargo run -p deepwork
+```
+
+In `--sandbox` mode the daemon keeps its hosts file, policies and state under the given directory
+and doesn't run system commands. It can still close your own processes that match a running block,
+so don't put your editor in a test block. The network features only run as root (or with `--net`).
+
+For screenshots, the app can open a page and render itself to a PNG, which also works headless with
+GTK's Broadway backend:
+
+```sh
+DEEPWORK_DEBUG_PAGE=stats DEEPWORK_DEBUG_SIZE=1000x720 DEEPWORK_DEBUG_SHOT=/tmp/stats.png \
+  DEEPWORK_SOCKET=/tmp/dw.sock cargo run -p deepwork
+```
+
+`DEEPWORK_DEBUG_OPEN=edit|start|unlock|apps|new` also opens a dialog first.
+
+The CI workflow (`.github/workflows/ci.yml`) runs the format check, Clippy and the tests in an Arch
+Linux container.
+
+## License
+
+DeepWork is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE).

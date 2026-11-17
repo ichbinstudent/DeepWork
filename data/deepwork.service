@@ -1,0 +1,17 @@
+[Unit]
+Description=DeepWork distraction blocker
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=@BINDIR@/deepwork-daemon
+Restart=always
+RestartSec=1
+RuntimeDirectory=deepwork
+StateDirectory=deepwork
+StateDirectoryMode=0700
+# Never leave web traffic redirected to a filter that isn't running.
+ExecStopPost=-/usr/bin/env nft delete table inet deepwork
+
+[Install]
+WantedBy=multi-user.target

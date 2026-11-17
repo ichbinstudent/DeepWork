@@ -1,0 +1,172 @@
+//! Blocking client for the daemon socket.
+
+use std::io::{BufRead, BufReader, Write};
+
+use serde::de::DeserializeOwned;
+
+use crate::model::BlockConfig;
+use crate::protocol::{Event, Request, Response, Stats, Status, socket_path};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientError {
+    /// The daemon isn't running or the socket isn't accessible.
+    Unavailable(String),
+    /// The daemon refused the request.
+    Refused(String),
+    Protocol(String),
+}
+
+impl std::fmt::Display for ClientError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClientError::Unavailable(e) => write!(f, "DeepWork service unavailable: {e}"),
+            ClientError::Refused(e) => f.write_str(e),
+            ClientError::Protocol(e) => write!(f, "Protocol error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+pub type Result<T> = std::result::Result<T, ClientError>;
+
+#[derive(Debug, Clone)]
+pub struct Client {
+    path: String,
+}
+
+impl Default for Client {
+    fn default() -> Self {
+        Self {
+            path: socket_path(),
+        }
+    }
+}
+
+/// Open a connection to the daemon (Unix socket).
+#[cfg(unix)]
+fn connect(path: &str) -> Result<std::os::unix::net::UnixStream> {
+    let stream = std::os::unix::net::UnixStream::connect(path)
+        .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+    use std::time::Duration;
+    stream.set_read_timeout(Some(Duration::from_secs(10))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(5))).ok();
+    Ok(stream)
+}
+
+/// Open a connection to the daemon (named pipe).
+#[cfg(windows)]
+fn connect(path: &str) -> Result<std::fs::File> {
+    // A named pipe opens like a file; the server handles one request per line.
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .map_err(|e| ClientError::Unavailable(e.to_string()))
+}
+
+impl Client {
+    pub fn new(path: impl Into<String>) -> Self {
+        Self { path: path.into() }
+    }
+
+    pub fn call_raw(&self, req: &Request) -> Result<serde_json::Value> {
+        let mut stream = connect(&self.path)?;
+        let mut line = serde_json::to_vec(req).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        line.push(b'\n');
+        stream
+            .write_all(&line)
+            .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+        let mut reader = BufReader::new(stream);
+        let mut buf = String::new();
+        reader
+            .read_line(&mut buf)
+            .map_err(|e| ClientError::Unavailable(e.to_string()))?;
+        if buf.is_empty() {
+            return Err(ClientError::Unavailable("connection closed".into()));
+        }
+        let resp: Response =
+            serde_json::from_str(&buf).map_err(|e| ClientError::Protocol(e.to_string()))?;
+        if resp.ok {
+            Ok(resp.data)
+        } else {
+            Err(ClientError::Refused(
+                resp.error.unwrap_or_else(|| "request refused".into()),
+            ))
+        }
+    }
+
+    pub fn call<T: DeserializeOwned>(&self, req: &Request) -> Result<T> {
+        let v = self.call_raw(req)?;
+        serde_json::from_value(v).map_err(|e| ClientError::Protocol(e.to_string()))
+    }
+
+    pub fn status(&self) -> Result<Status> {
+        self.call(&Request::Status)
+    }
+    pub fn events(&self, since: u64) -> Result<Vec<Event>> {
+        self.call(&Request::Events { since })
+    }
+    pub fn stats(&self, days: u32) -> Result<Stats> {
+        self.call(&Request::Stats { days })
+    }
+    pub fn create_block(&self, config: BlockConfig, password: Option<String>) -> Result<String> {
+        self.call(&Request::CreateBlock { config, password })
+    }
+    pub fn update_block(
+        &self,
+        id: &str,
+        config: BlockConfig,
+        password: Option<String>,
+    ) -> Result<()> {
+        self.call_raw(&Request::UpdateBlock {
+            id: id.into(),
+            config,
+            password,
+        })
+        .map(|_| ())
+    }
+    pub fn delete_block(&self, id: &str) -> Result<()> {
+        self.call_raw(&Request::DeleteBlock { id: id.into() })
+            .map(|_| ())
+    }
+    pub fn start_block(&self, id: &str, minutes: u32) -> Result<()> {
+        self.call_raw(&Request::StartBlock {
+            id: id.into(),
+            minutes,
+        })
+        .map(|_| ())
+    }
+    pub fn stop_block(&self, id: &str) -> Result<()> {
+        self.call_raw(&Request::StopBlock { id: id.into() })
+            .map(|_| ())
+    }
+    pub fn unlock_challenge(&self, id: &str) -> Result<String> {
+        self.call(&Request::UnlockChallenge { id: id.into() })
+    }
+    pub fn unlock(&self, id: &str, response: &str) -> Result<()> {
+        self.call_raw(&Request::Unlock {
+            id: id.into(),
+            response: response.into(),
+        })
+        .map(|_| ())
+    }
+    pub fn take_break(&self, id: &str, minutes: u32) -> Result<()> {
+        self.call_raw(&Request::TakeBreak {
+            id: id.into(),
+            minutes,
+        })
+        .map(|_| ())
+    }
+    pub fn end_break(&self, id: &str) -> Result<()> {
+        self.call_raw(&Request::EndBreak { id: id.into() })
+            .map(|_| ())
+    }
+    pub fn set_settings(&self, settings: crate::model::Settings) -> Result<()> {
+        self.call_raw(&Request::SetSettings { settings })
+            .map(|_| ())
+    }
+    pub fn freeze(&self, minutes: u32) -> Result<()> {
+        self.call_raw(&Request::Freeze { minutes }).map(|_| ())
+    }
+}

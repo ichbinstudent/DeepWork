@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=DeepWork
+GenericName=Distraction Blocker
+Comment=Block distracting websites and apps
+Exec=deepwork
+Icon=io.github.ichbinstudent.DeepWork
+Terminal=false
+Categories=Utility;GTK;
+Keywords=focus;block;blocker;distraction;productivity;website;pomodoro;
+StartupNotify=true

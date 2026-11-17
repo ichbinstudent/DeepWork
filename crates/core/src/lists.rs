@@ -1,0 +1,769 @@
+//! Built-in filter lists and importing domain lists.
+//!
+//! A block references lists by id (see `BlockConfig::lists`), so the
+//! contents stay current when DeepWork is updated. Application entries use
+//! the same rules as user-entered apps: process names (matched against the
+//! command name and executable) and desktop / Flatpak app ids.
+
+use std::collections::BTreeSet;
+
+use crate::model::normalize_domain;
+
+pub struct FilterList {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub description: &'static str,
+    pub icon: &'static str,
+    pub websites: &'static [&'static str],
+    pub apps: &'static [&'static str],
+}
+
+pub const LISTS: &[FilterList] = &[
+    FilterList {
+        id: "social",
+        name: "Social media",
+        description: "Feeds, timelines and short videos",
+        icon: "system-users-symbolic",
+        websites: &[
+            "facebook.com",
+            "instagram.com",
+            "x.com",
+            "twitter.com",
+            "tiktok.com",
+            "reddit.com",
+            "redd.it",
+            "linkedin.com",
+            "snapchat.com",
+            "pinterest.com",
+            "tumblr.com",
+            "threads.net",
+            "threads.com",
+            "bsky.app",
+            "mastodon.social",
+            "9gag.com",
+            "quora.com",
+            "vk.com",
+            "weibo.com",
+            "imgur.com",
+            "bereal.com",
+            "lemmy.world",
+        ],
+        apps: &["org.kde.tokodon", "tokodon", "dev.geopjr.Tuba", "tuba"],
+    },
+    FilterList {
+        id: "chat",
+        name: "Chat & messaging",
+        description: "Discord, WhatsApp, Telegram, Slack and friends",
+        icon: "chat-message-new-symbolic",
+        websites: &[
+            "discord.com",
+            "discordapp.com",
+            "discord.gg",
+            "web.whatsapp.com",
+            "web.telegram.org",
+            "messenger.com",
+            "slack.com",
+            "teams.microsoft.com",
+            "teams.live.com",
+            "chat.google.com",
+            "app.element.io",
+            "signal.org",
+        ],
+        apps: &[
+            "discord",
+            "com.discordapp.Discord",
+            "vesktop",
+            "dev.vencord.Vesktop",
+            "telegram-desktop",
+            "org.telegram.desktop",
+            "signal-desktop",
+            "org.signal.Signal",
+            "slack",
+            "com.slack.Slack",
+            "teams-for-linux",
+            "com.github.IsmaelMartinez.teams_for_linux",
+            "element-desktop",
+            "im.riot.Riot",
+            "whatsapp-for-linux",
+            "com.github.eneshecan.WhatsAppForLinux",
+            "zapzap",
+            "com.rtosta.zapzap",
+            "fractal",
+            "org.gnome.Fractal",
+            "ferdium",
+            "org.ferdium.Ferdium",
+        ],
+    },
+    FilterList {
+        id: "video",
+        name: "Video & streaming",
+        description: "YouTube, Twitch, Netflix and other streaming services",
+        icon: "video-x-generic-symbolic",
+        websites: &[
+            "youtube.com",
+            "youtu.be",
+            "twitch.tv",
+            "netflix.com",
+            "vimeo.com",
+            "disneyplus.com",
+            "primevideo.com",
+            "hulu.com",
+            "max.com",
+            "hbomax.com",
+            "crunchyroll.com",
+            "kick.com",
+            "dailymotion.com",
+            "paramountplus.com",
+            "peacocktv.com",
+            "joyn.de",
+            "rumble.com",
+            "nebula.tv",
+            "wowtv.de",
+            "zdf.de",
+            "ardmediathek.de",
+        ],
+        apps: &[
+            "freetube",
+            "io.freetubeapp.FreeTube",
+            "stremio",
+            "com.stremio.Stremio",
+            "kodi",
+            "tv.kodi.Kodi",
+            "plex",
+            "tv.plex.PlexDesktop",
+            "grayjay",
+            "app.grayjay.Grayjay",
+            "de.schmidhuberj.tubefeeder",
+        ],
+    },
+    FilterList {
+        id: "music",
+        name: "Music streaming",
+        description: "Spotify, SoundCloud and other music services",
+        icon: "audio-headphones-symbolic",
+        websites: &[
+            "spotify.com",
+            "music.youtube.com",
+            "soundcloud.com",
+            "deezer.com",
+            "tidal.com",
+            "music.apple.com",
+            "pandora.com",
+            "bandcamp.com",
+            "music.amazon.com",
+        ],
+        apps: &[
+            "spotify",
+            "com.spotify.Client",
+            "tidal-hifi",
+            "com.mastermindzh.tidal-hifi",
+            "ncspot",
+            "io.github.hrkfdn.ncspot",
+            "dev.alextren.Spot",
+            "deezer-desktop",
+        ],
+    },
+    FilterList {
+        id: "games",
+        name: "Games",
+        description: "Game launchers (incl. Minecraft and modding launchers), stores and browser games",
+        icon: "input-gaming-symbolic",
+        websites: &[
+            "store.steampowered.com",
+            "steamcommunity.com",
+            "epicgames.com",
+            "gog.com",
+            "roblox.com",
+            "chess.com",
+            "lichess.org",
+            "miniclip.com",
+            "poki.com",
+            "crazygames.com",
+            "itch.io",
+            "coolmathgames.com",
+            "kongregate.com",
+            "armorgames.com",
+            "battle.net",
+            "geoguessr.com",
+            "agar.io",
+            "slither.io",
+            "neal.fun",
+            // Minecraft
+            "minecraft.net",
+            "modrinth.com",
+            "curseforge.com",
+            "planetminecraft.com",
+            "hypixel.net",
+            "namemc.com",
+            "minecraft.wiki",
+            "mcmod.cn",
+            "technicpack.net",
+        ],
+        apps: &[
+            "steam",
+            "steamwebhelper",
+            "com.valvesoftware.Steam",
+            "lutris",
+            "net.lutris.Lutris",
+            "heroic",
+            "com.heroicgameslauncher.hgl",
+            "minecraft-launcher",
+            "com.mojang.Minecraft",
+            "prismlauncher",
+            "org.prismlauncher.PrismLauncher",
+            "retroarch",
+            "org.libretro.RetroArch",
+            "itch",
+            "io.itch.itch",
+            "sober",
+            "org.vinegarhq.Sober",
+            "faugus-launcher",
+            "io.github.Faugus.faugus-launcher",
+            // Minecraft launchers
+            "ModrinthApp",
+            "modrinth-app",
+            "com.modrinth.ModrinthApp",
+            "curseforge",
+            "atlauncher",
+            "com.atlauncher.ATLauncher",
+            "gdlauncher",
+            "io.gdevs.GDLauncher",
+            "multimc",
+            "org.multimc.MultiMC",
+            "polymc",
+            "org.polymc.PolyMC",
+            "fjordlauncher",
+            "io.unmojang.FjordLauncher",
+            "elyprismlauncher",
+            "hmcl",
+            "ftb-app",
+            "ftbapp",
+            "technic-launcher",
+            "mcpelauncher-ui-qt",
+            "mcpelauncher-client",
+            "io.mrarm.mcpelauncher",
+            // Java launchers and the game itself, however it was started
+            "cmd:tlauncher",
+            "cmd:sklauncher",
+            "cmd:net.minecraft.client.main.Main",
+            "cmd:net.fabricmc.loader.impl.launch.knot.KnotClient",
+            "cmd:org.quiltmc.loader.impl.launch.knot.KnotClient",
+            "cmd:cpw.mods.bootstraplauncher.BootstrapLauncher",
+            "cmd:net.minecraft.launchwrapper.Launch",
+        ],
+    },
+    FilterList {
+        id: "news",
+        name: "News",
+        description: "News sites and feed readers",
+        icon: "x-office-document-symbolic",
+        websites: &[
+            "news.ycombinator.com",
+            "cnn.com",
+            "bbc.com",
+            "bbc.co.uk",
+            "nytimes.com",
+            "theguardian.com",
+            "foxnews.com",
+            "washingtonpost.com",
+            "reuters.com",
+            "apnews.com",
+            "nbcnews.com",
+            "cnbc.com",
+            "bloomberg.com",
+            "huffpost.com",
+            "buzzfeed.com",
+            "dailymail.co.uk",
+            "theverge.com",
+            "spiegel.de",
+            "bild.de",
+            "zeit.de",
+            "welt.de",
+            "tagesschau.de",
+            "n-tv.de",
+            "focus.de",
+            "sueddeutsche.de",
+            "faz.net",
+            "t-online.de",
+            "heise.de",
+            "golem.de",
+            "derstandard.at",
+            "orf.at",
+        ],
+        apps: &[
+            "newsflash",
+            "io.gitlab.news_flash.NewsFlash",
+            "gfeeds",
+            "org.gabmus.gfeeds",
+            "akregator",
+            "org.kde.akregator",
+        ],
+    },
+    FilterList {
+        id: "shopping",
+        name: "Shopping",
+        description: "Online stores and marketplaces",
+        icon: "emoji-objects-symbolic",
+        websites: &[
+            "amazon.com",
+            "amazon.de",
+            "amazon.co.uk",
+            "amazon.fr",
+            "ebay.com",
+            "ebay.de",
+            "aliexpress.com",
+            "etsy.com",
+            "temu.com",
+            "shein.com",
+            "zalando.de",
+            "otto.de",
+            "idealo.de",
+            "walmart.com",
+            "target.com",
+            "bestbuy.com",
+            "wish.com",
+            "kleinanzeigen.de",
+            "vinted.com",
+            "vinted.de",
+            "mediamarkt.de",
+            "geizhals.de",
+            "mydealz.de",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "email",
+        name: "Email",
+        description: "Webmail and mail apps, for when the inbox can wait",
+        icon: "mail-unread-symbolic",
+        websites: &[
+            "mail.google.com",
+            "gmail.com",
+            "outlook.live.com",
+            "outlook.office.com",
+            "outlook.office365.com",
+            "mail.yahoo.com",
+            "mail.proton.me",
+            "app.tuta.com",
+            "gmx.net",
+            "gmx.de",
+            "web.de",
+            "fastmail.com",
+            "posteo.de",
+            "mailbox.org",
+        ],
+        apps: &[
+            "thunderbird",
+            "org.mozilla.Thunderbird",
+            "betterbird",
+            "eu.betterbird.Betterbird",
+            "evolution",
+            "org.gnome.Evolution",
+            "geary",
+            "org.gnome.Geary",
+            "kmail",
+            "org.kde.kmail2",
+            "mailspring",
+            "com.getmailspring.Mailspring",
+        ],
+    },
+    FilterList {
+        id: "ai",
+        name: "AI chatbots",
+        description: "ChatGPT, Claude, Gemini and other assistants",
+        icon: "applications-science-symbolic",
+        websites: &[
+            "chatgpt.com",
+            "chat.openai.com",
+            "claude.ai",
+            "gemini.google.com",
+            "copilot.microsoft.com",
+            "perplexity.ai",
+            "character.ai",
+            "poe.com",
+            "chat.deepseek.com",
+            "grok.com",
+            "chat.mistral.ai",
+            "meta.ai",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "rabbitholes",
+        name: "Rabbit holes",
+        description: "Wikis, trivia and review sites that eat afternoons",
+        icon: "accessories-dictionary-symbolic",
+        websites: &[
+            "wikipedia.org",
+            "tvtropes.org",
+            "fandom.com",
+            "knowyourmeme.com",
+            "imdb.com",
+            "letterboxd.com",
+            "goodreads.com",
+            "medium.com",
+            "substack.com",
+            "producthunt.com",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "dating",
+        name: "Dating",
+        description: "Dating sites and apps",
+        icon: "face-wink-symbolic",
+        websites: &[
+            "tinder.com",
+            "bumble.com",
+            "hinge.co",
+            "okcupid.com",
+            "match.com",
+            "badoo.com",
+            "parship.de",
+            "lovoo.com",
+            "plentyoffish.com",
+            "grindr.com",
+            "elitepartner.de",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "gambling",
+        name: "Gambling",
+        description: "Betting, casino and poker sites",
+        icon: "emoji-activities-symbolic",
+        websites: &[
+            "bet365.com",
+            "pokerstars.com",
+            "draftkings.com",
+            "fanduel.com",
+            "williamhill.com",
+            "betfair.com",
+            "888.com",
+            "888casino.com",
+            "888poker.com",
+            "bwin.com",
+            "bwin.de",
+            "unibet.com",
+            "stake.com",
+            "tipico.de",
+            "tipico.com",
+            "betway.com",
+            "ladbrokes.com",
+            "paddypower.com",
+            "skybet.com",
+            "betsson.com",
+            "mrgreen.com",
+            "leovegas.com",
+            "interwetten.com",
+            "betano.de",
+            "betano.com",
+            "bovada.lv",
+            "roobet.com",
+            "betmgm.com",
+            "caesars.com",
+            "partypoker.com",
+            "ggpoker.com",
+            "lottoland.com",
+            "lotto.de",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "adult",
+        name: "Adult content",
+        description: "Major adult sites. Import a full list for wider coverage.",
+        icon: "emblem-important-symbolic",
+        websites: &[
+            "pornhub.com",
+            "xvideos.com",
+            "xnxx.com",
+            "xhamster.com",
+            "redtube.com",
+            "youporn.com",
+            "tube8.com",
+            "spankbang.com",
+            "onlyfans.com",
+            "fansly.com",
+            "chaturbate.com",
+            "stripchat.com",
+            "bongacams.com",
+            "livejasmin.com",
+            "cam4.com",
+            "brazzers.com",
+            "eporner.com",
+            "txxx.com",
+            "hqporner.com",
+            "beeg.com",
+            "porn.com",
+            "xhamsterlive.com",
+            "rule34.xxx",
+            "e-hentai.org",
+            "nhentai.net",
+            "motherless.com",
+            "tnaflix.com",
+            "youjizz.com",
+            "4tube.com",
+            "manyvids.com",
+            "clips4sale.com",
+            "literotica.com",
+            "camsoda.com",
+            "myfreecams.com",
+        ],
+        apps: &[],
+    },
+    FilterList {
+        id: "vpn",
+        name: "VPNs & proxies",
+        description: "VPN apps, Tor and web proxies that tunnel around blocks",
+        icon: "network-vpn-symbolic",
+        websites: &[
+            "torproject.org",
+            "protonvpn.com",
+            "mullvad.net",
+            "nordvpn.com",
+            "expressvpn.com",
+            "surfshark.com",
+            "windscribe.com",
+            "privateinternetaccess.com",
+            "cyberghostvpn.com",
+            "tunnelbear.com",
+            "hide.me",
+            "ivpn.net",
+            "airvpn.org",
+            "psiphon.ca",
+            "getlantern.org",
+            "hola.org",
+            "urban-vpn.com",
+            "browsec.com",
+            "zenmate.com",
+            "setupvpn.com",
+            "vpnbook.com",
+            "riseup.net",
+            "croxyproxy.com",
+            "croxyproxy.rocks",
+            "proxysite.com",
+            "kproxy.com",
+            "hidester.com",
+            "proxyium.com",
+            "blockaway.net",
+            "4everproxy.com",
+            "plainproxies.com",
+            "hidemy.name",
+        ],
+        apps: &[
+            "openvpn",
+            "openvpn3",
+            "protonvpn",
+            "protonvpn-app",
+            "cmd:proton.vpn.app",
+            "com.protonvpn.www",
+            "mullvad",
+            "mullvad-gui",
+            "mullvad-vpn",
+            "nordvpn",
+            "expressvpn",
+            "windscribe",
+            "surfshark",
+            "piactl",
+            "pia-client",
+            "warp-cli",
+            "warp-taskbar",
+            "riseup-vpn",
+            "calyx-vpn",
+            "psiphon",
+            "lantern",
+            "tor",
+            "torbrowser-launcher",
+            "org.torproject.torbrowser-launcher",
+            "com.github.micahflee.torbrowser-launcher",
+            "cmd:tor-browser",
+            "i2p",
+            "i2pd",
+            "v2ray",
+            "xray",
+            "sing-box",
+            "clash",
+            "clash-verge",
+            "mihomo",
+            "nekoray",
+            "nekobox",
+            "hiddify",
+            "ss-local",
+            "sslocal",
+            "trojan",
+            "naive",
+            "outline-client",
+        ],
+    },
+    FilterList {
+        id: "browsers",
+        name: "Web browsers",
+        description: "Close every browser, for offline deep work",
+        icon: "web-browser-symbolic",
+        websites: &[],
+        apps: &[
+            "firefox",
+            "firefox-bin",
+            "firefox-esr",
+            "org.mozilla.firefox",
+            "chrome",
+            "google-chrome",
+            "com.google.Chrome",
+            "chromium",
+            "org.chromium.Chromium",
+            "brave",
+            "com.brave.Browser",
+            "msedge",
+            "microsoft-edge",
+            "com.microsoft.Edge",
+            "vivaldi",
+            "vivaldi-bin",
+            "com.vivaldi.Vivaldi",
+            "librewolf",
+            "io.gitlab.librewolf-community",
+            "zen",
+            "zen-bin",
+            "app.zen_browser.zen",
+            "epiphany",
+            "org.gnome.Epiphany",
+            "falkon",
+            "org.kde.falkon",
+            "opera",
+            "com.opera.Opera",
+            "floorp",
+            "one.ablaze.floorp",
+            "waterfox",
+            "net.waterfox.waterfox",
+            "mullvad-browser",
+            "torbrowser-launcher",
+            "org.torproject.torbrowser-launcher",
+            "qutebrowser",
+            "org.qutebrowser.qutebrowser",
+        ],
+    },
+];
+
+pub fn get(id: &str) -> Option<&'static FilterList> {
+    LISTS.iter().find(|l| l.id == id)
+}
+
+/// Parse a domain list in any common format and return the valid, unique
+/// domains plus the number of non-empty lines that couldn't be used.
+///
+/// Understands plain domains, hosts files (`0.0.0.0 example.com`),
+/// adblock rules (`||example.com^`), wildcards and URLs. Comments starting
+/// with `#` or `!` are ignored.
+pub fn parse_domain_list(text: &str) -> (Vec<String>, usize) {
+    const SKIP: &[&str] = &[
+        "localhost",
+        "localhost.localdomain",
+        "local",
+        "broadcasthost",
+        "0.0.0.0",
+    ];
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    let mut skipped = 0;
+    for raw in text.lines() {
+        let line = raw.split('#').next().unwrap_or("").trim();
+        if line.is_empty() || line.starts_with('!') || line.starts_with('[') {
+            continue;
+        }
+        // Allow-list rules ("@@||…") are not blocks.
+        if line.starts_with("@@") {
+            skipped += 1;
+            continue;
+        }
+        let mut tokens: Vec<&str> = line.split_whitespace().collect();
+        // hosts format: first token is an IP address
+        if tokens.len() >= 2 && tokens[0].parse::<std::net::IpAddr>().is_ok() {
+            tokens.remove(0);
+        }
+        let mut any = false;
+        for tok in tokens {
+            // "||example.com^$third-party" -> "example.com"
+            let t = tok
+                .split('$')
+                .next()
+                .unwrap_or("")
+                .trim_start_matches("||")
+                .trim_end_matches('^');
+            if t.is_empty() || SKIP.contains(&t) {
+                continue;
+            }
+            if let Ok(d) = normalize_domain(t) {
+                any = true;
+                if seen.insert(d.clone()) {
+                    out.push(d);
+                }
+            }
+        }
+        if !any {
+            skipped += 1;
+        }
+    }
+    (out, skipped)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::normalize_app;
+
+    #[test]
+    fn builtin_lists_are_valid() {
+        let mut ids = BTreeSet::new();
+        for l in LISTS {
+            assert!(ids.insert(l.id), "duplicate list id {}", l.id);
+            assert!(
+                !l.websites.is_empty() || !l.apps.is_empty(),
+                "{} is empty",
+                l.id
+            );
+            let mut seen = BTreeSet::new();
+            for w in l.websites {
+                assert_eq!(normalize_domain(w).as_deref(), Ok(*w), "{}: {w}", l.id);
+                assert!(seen.insert(*w), "{}: duplicate {w}", l.id);
+            }
+            let mut seen = BTreeSet::new();
+            for a in l.apps {
+                assert_eq!(normalize_app(a).as_deref(), Ok(*a), "{}: {a}", l.id);
+                assert!(seen.insert(a.to_lowercase()), "{}: duplicate {a}", l.id);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_common_formats() {
+        let text = "\
+# a hosts file
+127.0.0.1 localhost
+0.0.0.0 ads.example.com tracker.example.com
+::1 ip6-localhost
+||adblock.example^
+||withopts.example^$third-party
+@@||allowed.example^
+! adblock comment
+https://www.Some-Site.org/path
+*.wild.example
+plain.example.net   # trailing comment
+not a domain
+";
+        let (domains, skipped) = parse_domain_list(text);
+        assert_eq!(
+            domains,
+            vec![
+                "ads.example.com",
+                "tracker.example.com",
+                "adblock.example",
+                "withopts.example",
+                "some-site.org",
+                "wild.example",
+                "plain.example.net"
+            ]
+        );
+        // localhost line, ip6-localhost line, allow rule, "not a domain"
+        assert_eq!(skipped, 4);
+    }
+}

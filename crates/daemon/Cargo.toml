@@ -1,0 +1,16 @@
+[package]
+name = "deepwork-daemon"
+description = "DeepWork's root service: enforces website, app and network blocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+deepwork-core.workspace = true
+libc = "0.2.191"
+serde.workspace = true
+serde_json.workspace = true
+socket2 = { version = "0.6.5", features = ["all"] }

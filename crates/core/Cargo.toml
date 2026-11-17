@@ -1,0 +1,17 @@
+[package]
+name = "deepwork-core"
+description = "Data model, locking rules and wire protocol shared by DeepWork's service and app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+chrono = "0.4.45"
+pbkdf2 = "0.13.0"
+rand = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.11.1"

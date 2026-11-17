@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DeepWork (top bar)
+Comment=DeepWork's top-bar indicator and notifications
+Exec=deepwork --background
+Icon=io.github.ichbinstudent.DeepWork
+Terminal=false
+NoDisplay=true
+X-GNOME-Autostart-enabled=true

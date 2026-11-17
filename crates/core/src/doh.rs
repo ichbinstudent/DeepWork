@@ -1,0 +1,167 @@
+//! Well-known encrypted DNS (DoH / DoT) endpoints.
+//!
+//! While a website block runs, these names are pointed at 0.0.0.0 and the
+//! addresses are firewalled for user processes, so browsers can't resolve
+//! blocked sites through their own DNS servers and fall back to the system
+//! resolver (which honours `/etc/hosts`).
+
+pub const DOH_HOSTS: &[&str] = &[
+    // Cloudflare
+    "cloudflare-dns.com",
+    "mozilla.cloudflare-dns.com",
+    "chrome.cloudflare-dns.com",
+    "1dot1dot1dot1.cloudflare-dns.com",
+    "one.one.one.one",
+    "security.cloudflare-dns.com",
+    "family.cloudflare-dns.com",
+    // Google
+    "dns.google",
+    "dns.google.com",
+    "dns64.dns.google",
+    // Quad9
+    "dns.quad9.net",
+    "dns9.quad9.net",
+    "dns10.quad9.net",
+    "dns11.quad9.net",
+    "dns12.quad9.net",
+    // OpenDNS / Cisco
+    "doh.opendns.com",
+    "doh.familyshield.opendns.com",
+    "doh.umbrella.com",
+    // NextDNS
+    "dns.nextdns.io",
+    "firefox.dns.nextdns.io",
+    "chromium.dns.nextdns.io",
+    // AdGuard
+    "dns.adguard.com",
+    "dns.adguard-dns.com",
+    "unfiltered.adguard-dns.com",
+    "family.adguard-dns.com",
+    "dns-unfiltered.adguard.com",
+    // Mullvad
+    "dns.mullvad.net",
+    "doh.mullvad.net",
+    "adblock.dns.mullvad.net",
+    "base.dns.mullvad.net",
+    "extended.dns.mullvad.net",
+    "all.dns.mullvad.net",
+    // Others
+    "doh.cleanbrowsing.org",
+    "doh.xfinity.com",
+    "dns.controld.com",
+    "freedns.controld.com",
+    "doh.dns.sb",
+    "doh.libredns.gr",
+    "dns.switch.ch",
+    "dns.digitale-gesellschaft.ch",
+    "doh.ffmuc.net",
+    "dns3.digitalcourage.de",
+    "dnsforge.de",
+    "doh.applied-privacy.net",
+    "dns.alidns.com",
+    "doh.pub",
+    "dns.twnic.tw",
+    "doh.360.cn",
+    "dns0.eu",
+    "zero.dns0.eu",
+    "kids.dns0.eu",
+    "open.dns0.eu",
+    "dns.njal.la",
+    "ordns.he.net",
+    "doh.tiar.app",
+];
+
+/// Anycast addresses of public resolvers. Only HTTPS/DoT ports are blocked,
+/// plain DNS on port 53 keeps working.
+pub const DOH_IPV4: &[&str] = &[
+    "1.1.1.1",
+    "1.0.0.1",
+    "1.1.1.2",
+    "1.0.0.2",
+    "1.1.1.3",
+    "1.0.0.3",
+    "104.16.248.249",
+    "104.16.249.249",
+    "8.8.8.8",
+    "8.8.4.4",
+    "9.9.9.9",
+    "149.112.112.112",
+    "9.9.9.10",
+    "149.112.112.10",
+    "9.9.9.11",
+    "149.112.112.11",
+    "208.67.222.222",
+    "208.67.220.220",
+    "208.67.222.123",
+    "208.67.220.123",
+    "94.140.14.14",
+    "94.140.15.15",
+    "94.140.14.15",
+    "94.140.15.16",
+    "94.140.14.140",
+    "94.140.14.141",
+    "45.90.28.0/24",
+    "45.90.30.0/24",
+    "194.242.2.0/24",
+    "76.76.2.0/24",
+    "76.76.10.0/24",
+    "185.228.168.0/24",
+    "185.228.169.0/24",
+    "185.222.222.222",
+    "45.11.45.11",
+    "193.110.81.0",
+    "185.253.5.0",
+    "223.5.5.5",
+    "223.6.6.6",
+    "1.12.12.12",
+    "120.53.53.53",
+];
+
+pub const DOH_IPV6: &[&str] = &[
+    "2606:4700:4700::1111",
+    "2606:4700:4700::1001",
+    "2606:4700:4700::1112",
+    "2606:4700:4700::1002",
+    "2606:4700:4700::1113",
+    "2606:4700:4700::1003",
+    "2001:4860:4860::8888",
+    "2001:4860:4860::8844",
+    "2620:fe::fe",
+    "2620:fe::9",
+    "2620:fe::10",
+    "2620:fe::fe:10",
+    "2620:fe::11",
+    "2620:fe::fe:11",
+    "2620:119:35::35",
+    "2620:119:53::53",
+    "2a10:50c0::ad1:ff",
+    "2a10:50c0::ad2:ff",
+    "2a10:50c0::1:ff",
+    "2a10:50c0::2:ff",
+    "2a07:a8c0::/32",
+    "2a07:a8c1::/32",
+    "2a07:e340::/32",
+    "2606:1a40::/32",
+    "2a0d:2a00::/32",
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::normalize_domain;
+
+    #[test]
+    fn entries_are_valid() {
+        for h in DOH_HOSTS {
+            assert_eq!(normalize_domain(h).as_deref(), Ok(*h), "{h}");
+        }
+        for a in DOH_IPV4 {
+            let ip = a.split('/').next().unwrap();
+            assert!(ip.parse::<std::net::Ipv4Addr>().is_ok(), "{a}");
+        }
+        for a in DOH_IPV6 {
+            let ip = a.split('/').next().unwrap();
+            assert!(ip.parse::<std::net::Ipv6Addr>().is_ok(), "{a}");
+        }
+    }
+}

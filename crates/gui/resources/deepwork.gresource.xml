@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/io/github/ichbinstudent/DeepWork">
+    <file>style.css</file>
+    <file>icons/scalable/actions/dw-focus-symbolic.svg</file>
+    <file>icons/scalable/actions/dw-shield-symbolic.svg</file>
+    <file>icons/scalable/actions/dw-chart-symbolic.svg</file>
+    <file>icons/scalable/actions/dw-coffee-symbolic.svg</file>
+    <file>icons/scalable/actions/dw-globe-symbolic.svg</file>
+    <file>tray/deepwork-idle-symbolic.svg</file>
+    <file>tray/deepwork-active-symbolic.svg</file>
+    <file>tray/deepwork-locked-symbolic.svg</file>
+    <file>tray/deepwork-break-symbolic.svg</file>
+    <file>tray/deepwork-frozen-symbolic.svg</file>
+    <file>tray/deepwork-offline-symbolic.svg</file>
+    <file alias="icons/scalable/apps/io.github.ichbinstudent.DeepWork.svg">../../../assets/icon.svg</file>
+  </gresource>
+</gresources>
