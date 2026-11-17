@@ -192,7 +192,7 @@ the lock menu).
 | Service ↔ app connection | Unix socket | Unix socket | named pipe client only |
 | Tray icon, running-app picker | ✅ | — | — |
 
-The macOS and Windows backends compile and are checked in CI (Windows on both x64 and ARM), but have never run on those systems.
+The macOS and Windows backends compile, but have never run on those systems. CI checks Windows (x64 and ARM); macOS is checked by hand for now.
 Each module's documentation lists what's still needed: for Windows, the named-pipe server comes
 first, because without it nothing can control the service.
 
