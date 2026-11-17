@@ -99,6 +99,19 @@ fn sidebar_row(item: &NavItem) -> gtk::ListBoxRow {
     gtk::ListBoxRow::builder().child(&b).name(item.name).build()
 }
 
+#[cfg(not(windows))]
+const START_SERVICE: &str = "sudo systemctl enable --now deepwork";
+#[cfg(not(windows))]
+const OFFLINE_HELP: &str = "Blocking is done by a small background service that runs with \
+    administrator rights. Install it with <b>./install.sh</b> from the DeepWork folder, or start \
+    it with:";
+#[cfg(windows)]
+const START_SERVICE: &str = "schtasks /run /tn DeepWork";
+#[cfg(windows)]
+const OFFLINE_HELP: &str = "Blocking is done by a small background service that runs with \
+    administrator rights. Install it by double-clicking <b>install.cmd</b> in the DeepWork \
+    folder, or start it from an administrator terminal with:";
+
 fn offline_page(store: &Rc<Store>) -> gtk::Widget {
     let retry = gtk::Button::builder()
         .label("Try again")
@@ -107,7 +120,7 @@ fn offline_page(store: &Rc<Store>) -> gtk::Widget {
     retry.add_css_class("pill");
     retry.add_css_class("suggested-action");
     let cmd = gtk::Label::builder()
-        .label("sudo systemctl enable --now deepwork")
+        .label(START_SERVICE)
         .selectable(true)
         .css_classes(["monospace", "card"])
         .margin_bottom(12)
@@ -123,10 +136,7 @@ fn offline_page(store: &Rc<Store>) -> gtk::Widget {
     let status = adw::StatusPage::builder()
         .icon_name("dw-shield-symbolic")
         .title("The DeepWork service isn't running")
-        .description(
-            "Blocking is done by a small background service that runs with administrator rights. \
-             Install it with <b>sudo ./install.sh</b> from the source folder, or start it with:",
-        )
+        .description(OFFLINE_HELP)
         .child(&inner)
         .vexpand(true)
         .build();
@@ -273,10 +283,20 @@ pub fn build(
     let update = {
         let store = store.clone();
         let top = top.clone();
+        let list = list.clone();
         move || {
             let online = store.online();
             top.set_visible_child_name(if online { "main" } else { "offline" });
             if online {
+                // Pages for features this OS doesn't have stay out of the way.
+                let caps = store.capabilities();
+                let mut i = 0;
+                while let Some(row) = list.row_at_index(i) {
+                    if row.widget_name() == "freeze" {
+                        row.set_visible(caps.freeze);
+                    }
+                    i += 1;
+                }
                 let s = store.status().unwrap();
                 let now = deepwork_core::now();
                 let n = s.blocks.iter().filter(|b| b.enforcing).count();

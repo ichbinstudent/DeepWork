@@ -158,18 +158,15 @@ while a block is locked or a freeze is running.
 
 ### Windows (experimental)
 
-Windows releases contain the service and `deepworkctl` for x64 and ARM; the app isn't available yet.
-Websites are blocked through the hosts file and browser policies (Chrome, Edge, Brave and Firefox),
-so proxy and VPN extensions in those browsers don't get around a block. Download
-`deepwork-<version>-windows-x64.zip` (or `-arm64`), unpack it, and in an administrator PowerShell:
+Download `deepwork-<version>-windows-x64.zip` (or `-arm64` for ARM PCs), unpack it and double-click
+**`install.cmd`**. It asks for administrator rights, copies DeepWork to `C:\Program Files\DeepWork`,
+adds it to the Start menu, puts `deepworkctl` on the PATH and starts the service. Run it again to
+update; your blocks are kept.
 
-```powershell
-cd deepwork-*-windows-x64
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-This copies the programs to `C:\Program Files\DeepWork`, puts `deepworkctl` on the PATH, and runs
-the service as SYSTEM from a scheduled task that starts with Windows. Then, in a new terminal:
+On Windows, DeepWork blocks websites through the hosts file and browser policies (Chrome, Edge, Brave
+and Firefox), so proxy and VPN extensions in those browsers don't get around a block. App blocking,
+Freeze, the network filter and the hardcore lock aren't available yet; the app leaves them out.
+Everything also works from the command line:
 
 ```powershell
 deepworkctl lists                         # built-in filter lists
@@ -177,14 +174,16 @@ deepworkctl add Social --lock strict list:social reddit.com
 deepworkctl start Social 60
 ```
 
-Blocks and settings live in `C:\ProgramData\DeepWork`, which only administrators can change. Only
-the user who installed it (and administrators) may control the service; others can be added to
-`allowed_users` in `config.json` by the last number of their SID (`whoami /user`). The service logs
-to `C:\ProgramData\DeepWork\deepwork.log`. Locks only stop
-standard users: any administrator can end the scheduled task. `uninstall.ps1` removes it again
-(`-Purge` also deletes the data).
+The service runs as SYSTEM from a scheduled task that starts with Windows and checks every five
+minutes that it's running. Blocks and settings live in `C:\ProgramData\DeepWork`, which only
+administrators can change; the service logs to `deepwork.log` there. Only the user who installed
+DeepWork (and administrators) may control it; others can be added to `allowed_users` in
+`config.json` by the last number of their SID (`whoami /user`). Locks only stop standard users: any
+administrator can end the scheduled task. Double-click `uninstall.cmd` to remove DeepWork (run
+`uninstall.ps1 -Purge` to delete your data too).
 
-DeepWork has had little testing on Windows so far. Please report what doesn't work.
+The app for ARM PCs is the x64 build, which Windows runs through emulation. DeepWork has had little
+testing on Windows so far. Please report what doesn't work.
 
 ## How it works
 
@@ -238,10 +237,12 @@ the lock menu).
 | *Until restart* lock | ✅ | ✅ (untested) | — |
 | Hardcore lock | ✅ | — | — |
 | Service ↔ app connection | Unix socket | Unix socket | named pipe (untested) |
+| App | ✅ | — | ✅ (no tray icon yet) |
 | Tray icon, running-app picker | ✅ | — | — |
 
-The Windows backend is checked in CI (x64 and ARM; the named pipe is tested there), but hasn't been
-used on a real machine much. The macOS backend compiles but has never run; CI doesn't check it while
+The Windows backend is checked in CI (x64 and ARM), and an end-to-end test installs the package on a
+Windows runner, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and
+uninstalls again. It hasn't been used on real machines much yet. The macOS backend compiles but has never run; CI doesn't check it while
 the repository is private. Each module's documentation lists what's still needed.
 
 ## Honest limitations

@@ -146,6 +146,7 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
 
     let update = {
         let ctx = ctx.clone();
+        let group = group.clone();
         move || {
             let Some(s) = ctx.store.status() else { return };
             syncing.set(true);
@@ -156,6 +157,9 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
             let caps = ctx.store.capabilities();
             doh.set_sensitive(caps.encrypted_dns);
             filter.set_sensitive(caps.https_filter);
+            // Nothing to switch on this OS: leave the section out. (On Linux
+            // it stays, to explain what's missing, e.g. nftables.)
+            group.set_visible(caps.os == "Linux" || caps.encrypted_dns || caps.https_filter);
             let (icon, text) = if !net.firewall_available && caps.os != "Linux" {
                 (
                     "dialog-warning-symbolic",
