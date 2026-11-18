@@ -160,7 +160,7 @@ impl Tray {
         let look = self.look.borrow();
         let mut tip = format!("{} \u{2013} {}", look.title, look.tooltip);
         if !look.label.is_empty() {
-            tip.push_str(&format!(" ({} left)", look.label.trim_start_matches("☕ ")));
+            tip.push_str(&format!(" ({} left)", look.label));
         }
         let mut data = NOTIFYICONDATAW {
             cbSize: size_of::<NOTIFYICONDATAW>() as u32,

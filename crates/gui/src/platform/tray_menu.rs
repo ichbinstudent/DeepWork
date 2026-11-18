@@ -20,7 +20,13 @@ pub struct Item {
     pub toggle: Option<bool>,
     pub action: Option<Action>,
     pub children: Vec<Item>,
+    /// A symbolic icon from the icon theme, drawn in the menu's text color
+    /// (where the tray shows menu icons).
+    pub icon: Option<&'static str>,
 }
+
+/// Marks locked blocks (flat and single-colored, unlike an emoji).
+pub const LOCK_ICON: &str = "changes-prevent-symbolic";
 
 impl Item {
     pub fn new(label: impl Into<String>, action: Action) -> Self {
@@ -31,6 +37,7 @@ impl Item {
             toggle: None,
             action: Some(action),
             children: vec![],
+            icon: None,
         }
     }
     pub fn info(label: impl Into<String>) -> Self {
@@ -41,6 +48,7 @@ impl Item {
             toggle: None,
             action: None,
             children: vec![],
+            icon: None,
         }
     }
     pub fn submenu(label: impl Into<String>, children: Vec<Item>) -> Self {
@@ -51,7 +59,12 @@ impl Item {
             toggle: None,
             action: None,
             children,
+            icon: None,
         }
+    }
+    pub fn with_icon(mut self, icon: Option<&'static str>) -> Self {
+        self.icon = icon;
+        self
     }
     pub fn separator() -> Self {
         Self {
@@ -61,6 +74,7 @@ impl Item {
             toggle: None,
             action: None,
             children: vec![],
+            icon: None,
         }
     }
 }
@@ -196,7 +210,7 @@ pub fn compute(status: Option<&Status>, now: f64, show_timer: Option<bool>) -> (
         (
             "break",
             format!("On a break until {}", format_time(back)),
-            format!("☕ {}", short_clock(back - now)),
+            short_clock(back - now),
         )
     } else if enforcing {
         let locked = active.iter().any(|b| b.locked);
@@ -250,11 +264,10 @@ pub fn compute(status: Option<&Status>, now: f64, show_timer: Option<bool>) -> (
             } else {
                 block_left(b, now)
             };
-            let lock = if b.locked { "🔒 " } else { "" };
-            items.push(Item::submenu(
-                format!("{lock}{} — {state}", b.config.name),
-                sub,
-            ));
+            items.push(
+                Item::submenu(format!("{} — {state}", b.config.name), sub)
+                    .with_icon(b.locked.then_some(LOCK_ICON)),
+            );
         }
     }
 
@@ -276,12 +289,8 @@ pub fn compute(status: Option<&Status>, now: f64, show_timer: Option<bool>) -> (
                     "Other duration…",
                     Action::StartCustom(b.id.clone()),
                 ));
-                let lock = if b.config.lock != LockKind::None {
-                    " 🔒"
-                } else {
-                    ""
-                };
-                Item::submenu(format!("{}{lock}", b.config.name), durations)
+                Item::submenu(b.config.name.clone(), durations)
+                    .with_icon((b.config.lock != LockKind::None).then_some(LOCK_ICON))
             })
             .collect();
         items.push(Item::submenu("Start a block", blocks));
@@ -389,6 +398,20 @@ mod tests {
                 .iter()
                 .any(|c| c.action == Some(Action::Stop("b1".into())))
         );
+        // A flat theme icon marks the lock, no (colored) emoji anywhere.
+        assert_eq!(sub.icon, Some(LOCK_ICON));
+        fn all(items: &[Item]) -> Vec<&Item> {
+            items
+                .iter()
+                .flat_map(|i| std::iter::once(i).chain(all(&i.children)))
+                .collect()
+        }
+        assert!(all(&items).iter().all(|i| {
+            i.label.is_ascii()
+                || i.label
+                    .chars()
+                    .all(|c| (c as u32) < 0x2000 || "—…".contains(c))
+        }));
         let (look, _) = compute(Some(&status(vec![block(true, true)])), 0.0, Some(false));
         assert_eq!(look.label, "");
         // Without a timer toggle the countdown is still there (for the tooltip).

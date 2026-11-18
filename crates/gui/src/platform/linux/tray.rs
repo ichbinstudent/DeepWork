@@ -156,6 +156,9 @@ impl Menu {
         if !children.is_empty() {
             p.insert("children-display".into(), "submenu".to_variant());
         }
+        if let Some(icon) = item.icon {
+            p.insert("icon-name".into(), icon.to_variant());
+        }
         if let Some(on) = item.toggle {
             p.insert("toggle-type".into(), "checkmark".to_variant());
             p.insert("toggle-state".into(), (on as i32).to_variant());
