@@ -165,6 +165,18 @@ foreach ($page in 'focus', 'blocks', 'settings') {
 }
 Remove-Item Env:DEEPWORK_DEBUG_PAGE, Env:DEEPWORK_DEBUG_SHOT, Env:DEEPWORK_DEBUG_SIZE
 
+# Frame rate with Windows' default timer and with the 1 ms timer the app asks
+# for (informational: the runners have no GPU and no real display).
+foreach ($mode in 'default', 'fine') {
+    $env:DEEPWORK_DEBUG_FPS = '1'
+    if ($mode -eq 'default') { $env:DEEPWORK_COARSE_TIMER = '1' } else { Remove-Item Env:DEEPWORK_COARSE_TIMER -ErrorAction SilentlyContinue }
+    $log = Join-Path $shots "fps-$mode.log"
+    $p = Start-Process (Join-Path $dir 'deepwork.exe') -PassThru -RedirectStandardError $log -RedirectStandardOutput "$log.out"
+    if (-not $p.WaitForExit(60000)) { $p.Kill() }
+    Write-Host "frame rate, $mode timer: $((Get-Content $log -ErrorAction SilentlyContinue | Select-String '^fps:') -join ' ')"
+}
+Remove-Item Env:DEEPWORK_DEBUG_FPS, Env:DEEPWORK_COARSE_TIMER -ErrorAction SilentlyContinue
+
 # A crashed (or killed) service comes back by itself.
 Stop-Process -Name deepwork-daemon -Force
 Start-Sleep -Seconds 3

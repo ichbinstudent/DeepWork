@@ -165,6 +165,8 @@ fn main() -> glib::ExitCode {
     let background = std::env::args().any(|a| a == "--background");
     #[cfg(windows)]
     platform::windows::set_app_id();
+    #[cfg(windows)]
+    platform::windows::fine_timer();
     // One copy per user: a second one shows the first one's window instead.
     #[cfg(windows)]
     if std::env::var_os("DEEPWORK_DEBUG_SHOT").is_none()

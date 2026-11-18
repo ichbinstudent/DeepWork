@@ -18,6 +18,19 @@ pub fn set_app_id() {
     unsafe { windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
 }
 
+/// GLib's main loop sleeps in steps of the system timer, 15.6 ms by default,
+/// which turns GTK's frame clock into an uneven ~32 frames per second:
+/// stuttering scrolling and animations. Ask for a 1 ms timer while the app
+/// runs (since Windows 10 2004 this only affects this process, and not
+/// while its windows are hidden). `DEEPWORK_COARSE_TIMER` skips it, for
+/// comparisons.
+pub fn fine_timer() {
+    if std::env::var_os("DEEPWORK_COARSE_TIMER").is_none() {
+        // SAFETY: no preconditions; the period lasts until the process ends.
+        unsafe { windows_sys::Win32::Media::timeBeginPeriod(1) };
+    }
+}
+
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
 }

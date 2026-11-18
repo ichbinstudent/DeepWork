@@ -361,9 +361,14 @@ pub fn build(
 
 /// Development aid: `DEEPWORK_DEBUG_PAGE=stats`, `DEEPWORK_DEBUG_OPEN=edit|start|unlock|apps|new`
 /// and `DEEPWORK_DEBUG_SHOT=/path.png` render the window to a PNG and quit.
+/// `DEEPWORK_DEBUG_FPS=1` redraws the window every frame for 3 seconds (about
+/// what scrolling costs), prints the frame rate and quits.
 /// Kept in release builds so CI can take screenshots of the real program.
 fn debug_hooks(ctx: &Rc<Ctx>) {
     use gtk::glib;
+    if std::env::var_os("DEEPWORK_DEBUG_FPS").is_some() {
+        measure_frames(&ctx.window);
+    }
     if let Some((w, h)) = std::env::var("DEEPWORK_DEBUG_SIZE").ok().and_then(|s| {
         let (w, h) = s.split_once('x')?;
         Some((w.parse().ok()?, h.parse().ok()?))
@@ -437,5 +442,53 @@ fn debug_hooks(ctx: &Rc<Ctx>) {
         if let Some(app) = win.application() {
             app.quit();
         }
+    });
+}
+
+/// Count frames while redrawing the whole window each one, then report the
+/// rate, the average and the longest gap between frames, and the renderer.
+fn measure_frames(window: &adw::ApplicationWindow) {
+    use std::cell::Cell;
+    let first = Cell::new(None::<i64>);
+    let last = Cell::new(0i64);
+    let frames = Cell::new(0u32);
+    let longest = Cell::new(0i64);
+    window.add_tick_callback(move |w, clock| {
+        let t = clock.frame_time(); // microseconds
+        w.queue_draw();
+        let Some(start) = first.get() else {
+            // Skip the first second: start-up isn't what we measure.
+            first.set(Some(t + 1_000_000));
+            last.set(t);
+            return gtk::glib::ControlFlow::Continue;
+        };
+        if t >= start {
+            frames.set(frames.get() + 1);
+            longest.set(longest.get().max(t - last.get()));
+        }
+        last.set(t);
+        let elapsed = t - start;
+        if elapsed >= 3_000_000 {
+            let n = frames.get().max(1);
+            let renderer = w
+                .renderer()
+                .map(|r| r.type_().name().to_string())
+                .unwrap_or_default();
+            eprintln!(
+                "fps: {:.1} frames/s, gaps {:.1} ms on average, {:.1} ms at most, refresh {:.1} Hz, {renderer}",
+                n as f64 / (elapsed as f64 / 1e6),
+                elapsed as f64 / 1e3 / n as f64,
+                longest.get() as f64 / 1e3,
+                match clock.refresh_info(t).0 {
+                    0 => 0.0,
+                    interval => 1e6 / interval as f64,
+                },
+            );
+            if let Some(app) = w.application() {
+                app.quit();
+            }
+            return gtk::glib::ControlFlow::Break;
+        }
+        gtk::glib::ControlFlow::Continue
     });
 }
