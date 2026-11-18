@@ -96,8 +96,12 @@ if ($sign) {
     # ISCC runs this for the installer and the uninstaller ($f is the file).
     # A wrapper in a path without spaces, so the command needs no quoting.
     $wrapper = Join-Path $env:RUNNER_TEMP 'deepwork-sign.cmd'
-    $quoted = ($sign | ForEach-Object { if ($_ -match ' ') { "`"$_`"" } else { $_ } }) -join ' '
-    Set-Content -Encoding ascii $wrapper "@`"$signtool`" $quoted %*"
+    # The password comes from the environment, not the file.
+    $cmdArgs = $sign | ForEach-Object {
+        if ($_ -eq $env:WINDOWS_SIGN_PASSWORD) { '"%WINDOWS_SIGN_PASSWORD%"' }
+        elseif ($_ -match ' ') { "`"$_`"" } else { $_ }
+    }
+    Set-Content -Encoding ascii $wrapper "@`"$signtool`" $($cmdArgs -join ' ') %*"
     $isccArgs += @('/DSign', "/Ssigntool=$wrapper `$f")
 }
 & $iscc @isccArgs windows\deepwork.iss
