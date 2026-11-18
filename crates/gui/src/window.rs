@@ -106,11 +106,11 @@ const OFFLINE_HELP: &str = "Blocking is done by a small background service that 
     administrator rights. Install it with <b>./install.sh</b> from the DeepWork folder, or start \
     it with:";
 #[cfg(windows)]
-const START_SERVICE: &str = "schtasks /run /tn DeepWork";
+const START_SERVICE: &str = "sc start DeepWork";
 #[cfg(windows)]
 const OFFLINE_HELP: &str = "Blocking is done by a small background service that runs with \
-    administrator rights. Install it by double-clicking <b>install.cmd</b> in the DeepWork \
-    folder, or start it from an administrator terminal with:";
+    administrator rights. If DeepWork was installed, start the <b>DeepWork</b> service in \
+    <i>Services</i>, or from an administrator terminal with:";
 
 fn offline_page(store: &Rc<Store>) -> gtk::Widget {
     let retry = gtk::Button::builder()

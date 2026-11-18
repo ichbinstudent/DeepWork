@@ -18,6 +18,7 @@ const USAGE: &str = "usage: deepworkctl <command>
   add <name> [--lock none|random|strict] <site|list:ID>...
                          create a block, e.g. add Social list:social reddit.com
   delete <block>         delete a block (if it isn't locked)
+  --version              show the version
 
 <block> is a block's name or id.";
 
@@ -180,6 +181,7 @@ fn main() {
             client.freeze(m).unwrap_or_else(|e| fail(&e));
             println!("Freezing for {}", format_duration(m as f64 * 60.0));
         }
+        ["--version"] | ["version"] => println!("deepworkctl {}", deepwork_core::VERSION),
         ["locked"] => {
             let s = status();
             let locked = s.frozen_until > now() || s.blocks.iter().any(|b| b.locked);

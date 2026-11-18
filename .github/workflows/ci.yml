@@ -55,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $bad = $false
-          foreach ($f in Get-ChildItem windows/*.ps1, .github/scripts/*.ps1) {
+          foreach ($f in Get-ChildItem .github/scripts/*.ps1) {
             $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
             foreach ($e in $errors) { Write-Host "$($f.Name):$($e.Extent.StartLineNumber): $($e.Message)"; $bad = $true }
@@ -74,8 +74,8 @@ jobs:
           cargo clippy --target aarch64-pc-windows-msvc -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
 
   # The GTK app for Windows (built with MSYS2, natively for x64 and ARM64),
-  # then an end-to-end test of the whole package: install, block, check,
-  # uninstall, with screenshots.
+  # the installer, then an end-to-end test of it: install, block, check,
+  # update, uninstall, with screenshots.
   windows-app:
     strategy:
       fail-fast: false
@@ -115,11 +115,14 @@ jobs:
           }
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
+      - name: Build the installer
+        shell: pwsh
+        run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/release -App app-bundle -Out dist
       - name: End-to-end test
         shell: pwsh
-        run: ./.github/scripts/windows-e2e.ps1 -App app-bundle
+        run: ./.github/scripts/windows-e2e.ps1 -Setup (Get-Item dist/*-setup.exe).FullName
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-app-screenshots-${{ matrix.arch }}
+          name: windows-e2e-${{ matrix.arch }}
           path: ${{ runner.temp }}/shots

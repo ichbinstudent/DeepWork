@@ -27,7 +27,7 @@ mod macos;
 #[cfg(unix)]
 pub mod unix_ipc;
 #[cfg(windows)]
-mod windows;
+pub mod windows;
 
 /// How the daemon was started.
 #[derive(Debug, Clone)]
@@ -198,7 +198,7 @@ pub fn default_paths() -> Paths {
 pub fn serve(
     path: &std::path::Path,
     daemon: std::sync::Arc<std::sync::Mutex<crate::state::Daemon>>,
-    allowed: Option<Vec<u32>>,
+    allowed: Option<Vec<crate::server::UserId>>,
 ) -> std::io::Result<()> {
     #[cfg(unix)]
     return unix_ipc::serve(path, daemon, allowed);

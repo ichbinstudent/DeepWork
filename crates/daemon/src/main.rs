@@ -66,26 +66,109 @@ pub fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Config {
-    /// User ids allowed to talk to the daemon (root always is). Empty = everyone.
-    allowed_users: Vec<u32>,
+    /// Who may control the service besides administrators: Unix user ids,
+    /// or Windows SIDs. Empty = everyone.
+    allowed_users: Vec<server::UserId>,
+}
+
+/// The users allowed to control the service (`None`: everyone). A config
+/// file that can't be read leaves only administrators in, never everyone.
+fn allowed_users(path: &Path) -> Option<Vec<server::UserId>> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(e) => {
+            eprintln!(
+                "deepwork: cannot read {} ({e}); only administrators may control DeepWork",
+                path.display()
+            );
+            return Some(vec![]);
+        }
+    };
+    match serde_json::from_str::<Config>(&text) {
+        Ok(c) => (!c.allowed_users.is_empty()).then_some(c.allowed_users),
+        Err(e) => {
+            eprintln!(
+                "deepwork: {} is invalid ({e}); only administrators may control DeepWork until it is fixed",
+                path.display()
+            );
+            Some(vec![])
+        }
+    }
 }
 
 fn usage() -> ! {
     eprintln!(
         "usage: deepwork-daemon [--sandbox DIR] [--socket PATH] [--net] [--filter-uid-min N]\n                       \
-         [--proxy-ports TLS,HTTP] [--cleanup]\n\n  \
+         [--proxy-ports TLS,HTTP] [--cleanup] [--allow-user ID]\n\n  \
          --sandbox DIR         keep all files under DIR and don't touch the system (for testing)\n  \
          --socket PATH         listen on PATH instead of the default socket\n  \
          --net                 manage the firewall and HTTPS filter even in the sandbox\n  \
          --filter-uid-min N    only filter processes of users with uid >= N (default 1000)\n  \
          --proxy-ports T,H     ports of the HTTPS and HTTP filter (default 41443,41080)\n  \
          --cleanup             remove blocks from the hosts file, browser policies and the firewall,\n                        \
-       and give administrator rights back (hardcore mode), then exit"
+       and give administrator rights back (hardcore mode), then exit\n  \
+         --allow-user ID       let a user control DeepWork (a uid, or a SID on Windows), then exit"
     );
     std::process::exit(2)
 }
 
 fn main() {
+    // Started by the Windows service control manager.
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some("--service") {
+        if let Err(e) = platform::windows::service::run(run) {
+            eprintln!("deepwork: cannot run as a service: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    run();
+}
+
+/// Add a user to `allowed_users` in the config file, keeping its other
+/// settings. On Windows, entries from before full SIDs (bare numbers) are
+/// dropped: they could match the wrong account.
+fn allow_user(path: &Path, id: &str) -> std::io::Result<()> {
+    let user: server::UserId = match id.parse::<u32>() {
+        Ok(uid) if !cfg!(windows) => server::UserId::Uid(uid),
+        _ if cfg!(windows) && !id.to_ascii_uppercase().starts_with("S-1-") => {
+            return Err(std::io::Error::other(format!("{id} is not a SID")));
+        }
+        _ => server::UserId::Sid(id.to_string()),
+    };
+    let mut config: serde_json::Value = fs::read_to_string(path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .filter(serde_json::Value::is_object)
+        .unwrap_or_else(|| serde_json::json!({}));
+    let mut list: Vec<serde_json::Value> = config
+        .get("allowed_users")
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+    if cfg!(windows) {
+        list.retain(|v| v.is_string());
+    }
+    let new = match &user {
+        server::UserId::Uid(uid) => serde_json::json!(uid),
+        server::UserId::Sid(sid) => serde_json::json!(sid),
+    };
+    let known = list.iter().any(|v| match (v, &new) {
+        (serde_json::Value::String(a), serde_json::Value::String(b)) => a.eq_ignore_ascii_case(b),
+        (a, b) => a == b,
+    });
+    if !known {
+        list.push(new);
+    }
+    config["allowed_users"] = serde_json::Value::Array(list);
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let text = serde_json::to_string_pretty(&config).unwrap_or_default();
+    write_atomic(path, text.as_bytes(), 0o644)
+}
+
+fn run() {
     let defaults = platform::default_paths();
     let mut opts = Options {
         root: PathBuf::from("/"),
@@ -98,9 +181,11 @@ fn main() {
     let mut config_path = defaults.config;
     let mut socket: Option<PathBuf> = None;
     let mut cleanup = false;
-    let mut args = std::env::args().skip(1);
+    let mut allow: Option<String> = None;
+    let mut args = std::env::args().skip(1).filter(|a| a != "--service");
     while let Some(a) = args.next() {
         match a.as_str() {
+            "--allow-user" => allow = Some(args.next().unwrap_or_else(|| usage())),
             "--sandbox" => {
                 let dir = PathBuf::from(args.next().unwrap_or_else(|| usage()));
                 opts.state_dir = dir.join("state");
@@ -134,6 +219,16 @@ fn main() {
         }
     }
     let socket = socket.unwrap_or_else(|| DEFAULT_SOCKET.into());
+    if let Some(id) = allow {
+        match allow_user(&config_path, &id) {
+            Ok(()) => println!("{id} may now control DeepWork (restart the service to apply)."),
+            Err(e) => {
+                eprintln!("deepwork: cannot update {}: {e}", config_path.display());
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     if let Err(e) = fs::create_dir_all(&opts.state_dir) {
         eprintln!("deepwork: cannot create {}: {e}", opts.state_dir.display());
@@ -171,11 +266,7 @@ fn main() {
         }),
         Err(_) => Persisted::default(),
     };
-    let config: Config = fs::read_to_string(&config_path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default();
-    let allowed = (!config.allowed_users.is_empty()).then_some(config.allowed_users);
+    let allowed = allowed_users(&config_path);
 
     let caps = enforcer.capabilities();
     let daemon = Arc::new(Mutex::new(Daemon::new(
@@ -256,5 +347,42 @@ fn main() {
                 eprintln!("deepwork: cannot save state: {e}");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allow_user_keeps_other_settings() {
+        let dir = std::env::temp_dir().join(format!("dw-allow-{}", std::process::id()));
+        let path = dir.join("config.json");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(&path, r#"{"allowed_users": [1000], "other": true}"#).unwrap();
+        let me = if cfg!(windows) {
+            "S-1-5-21-1-2-3-1001"
+        } else {
+            "1001"
+        };
+        allow_user(&path, me).unwrap();
+        allow_user(&path, me).unwrap(); // only once
+        let v: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v["other"], true);
+        let list = v["allowed_users"].as_array().unwrap();
+        if cfg!(windows) {
+            // Bare numbers (old style) are dropped on Windows.
+            assert_eq!(list, &[serde_json::json!(me)]);
+            assert!(allow_user(&path, "1001").is_err());
+        } else {
+            assert_eq!(list, &[serde_json::json!(1000), serde_json::json!(1001)]);
+        }
+        assert_eq!(allowed_users(&path).map(|l| l.len()), Some(list.len()));
+        // A broken file lets only administrators in.
+        fs::write(&path, "{ nope").unwrap();
+        assert_eq!(allowed_users(&path), Some(vec![]));
+        let _ = fs::remove_dir_all(&dir);
     }
 }

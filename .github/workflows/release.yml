@@ -100,20 +100,13 @@ jobs:
         with:
           name: gtk-app-${{ matrix.arch }}
           path: app-bundle
-      - name: Package
+      - name: Build the installer
         shell: pwsh
-        run: |
-          $v = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
-          $name = "deepwork-$v-windows-${{ matrix.arch }}"
-          New-Item -ItemType Directory $name | Out-Null
-          $bin = "target/${{ matrix.target }}/release"
-          Copy-Item "$bin/deepwork-daemon.exe", "$bin/deepworkctl.exe", windows/*.ps1, windows/*.cmd, README.md, LICENSE $name
-          Copy-Item app-bundle/* $name -Recurse
-          Compress-Archive -Path $name -DestinationPath "$name.zip"
+        run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/${{ matrix.target }}/release -App app-bundle -Out dist
       - uses: actions/upload-artifact@v4
         with:
           name: windows-${{ matrix.arch }}
-          path: deepwork-*.zip
+          path: dist/*-setup.exe
 
   release:
     needs: [linux, windows]

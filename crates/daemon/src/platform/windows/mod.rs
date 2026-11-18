@@ -1,11 +1,10 @@
 //! Windows (experimental): website blocking through the hosts file and
 //! browser policies (Chrome, Edge, Brave and Chromium in the registry,
 //! Firefox's `policies.json`), closing open connections to blocked sites,
-//! and the named pipe the app and `deepworkctl` talk to. The service runs as
-//! SYSTEM from a scheduled task (see `windows/install.ps1`).
+//! and the named pipe the app and `deepworkctl` talk to. It runs as the
+//! `DeepWork` Windows service ([`service`]), installed by `windows/deepwork.iss`.
 //!
 //! Still to do, roughly in order:
-//! - running as a real Windows service (the `windows-service` crate).
 //! - a tray icon for the app.
 //! - apps ([`ProcessTable`](super::ProcessTable)): Toolhelp32 snapshots,
 //!   `QueryFullProcessImageNameW`, `TerminateProcess`; Store apps by
@@ -26,6 +25,7 @@ use crate::browser::{Layout, PolicyStore};
 
 mod chromium;
 mod pipe;
+pub mod service;
 mod tcp;
 pub use pipe::serve;
 

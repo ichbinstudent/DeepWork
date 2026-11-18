@@ -158,11 +158,13 @@ while a block is locked or a freeze is running.
 
 ### Windows (experimental)
 
-Download `deepwork-<version>-windows-x64.zip` (or `-arm64` for ARM PCs), unpack it and double-click
-**`install.cmd`**. It asks for administrator rights, copies DeepWork to `C:\Program Files\DeepWork`,
-adds it to the Start menu, puts `deepworkctl` on the PATH and starts the service. From the next
-sign-in, DeepWork waits in the notification area: click its icon to open it, right-click for a menu
-to start, extend or stop blocks. Run `install.cmd` again to update; your blocks are kept.
+Download and run **`deepwork-<version>-windows-x64-setup.exe`**, or `-arm64-setup.exe` on ARM PCs
+(each installer refuses the other kind of PC). It asks for administrator rights, installs DeepWork
+to `C:\Program Files\DeepWork`, adds it to the Start menu and to *Settings → Apps*, puts
+`deepworkctl` on the PATH and starts the DeepWork service. From the next sign-in, DeepWork waits in
+the notification area: click its icon to open it, right-click for a menu to start, extend or stop
+blocks. To update, run the newer installer; your blocks, statistics and running locks are kept.
+Installing an older version over a newer one is refused (uninstall first).
 
 On Windows, DeepWork blocks websites through the hosts file and browser policies (Chrome, Edge, Brave
 and Firefox), so proxy and VPN extensions in those browsers don't get around a block. App blocking,
@@ -175,13 +177,20 @@ deepworkctl add Social --lock strict list:social reddit.com
 deepworkctl start Social 60
 ```
 
-The service runs as SYSTEM from a scheduled task that starts with Windows and checks every five
-minutes that it's running. Blocks and settings live in `C:\ProgramData\DeepWork`, which only
-administrators can change; the service logs to `deepwork.log` there. Only the user who installed
-DeepWork (and administrators) may control it; others can be added to `allowed_users` in
-`config.json` by the last number of their SID (`whoami /user`). Locks only stop standard users: any
-administrator can end the scheduled task. Double-click `uninstall.cmd` to remove DeepWork (run
-`uninstall.ps1 -Purge` to delete your data too).
+The service (`DeepWork` in *Services*) runs as SYSTEM, starts with Windows and is restarted if it
+crashes or is killed. Blocks and settings live in `C:\ProgramData\DeepWork`, which only
+administrators can change; the service logs to `deepwork.log` there. Only the user who started the
+installer (and administrators) may control it. To let another user in, run in an administrator
+terminal `deepwork-daemon --allow-user <SID>` (their SID is in `whoami /user`) and restart the
+service. Locks only stop standard users: an administrator can always stop the service.
+
+Uninstall from *Settings → Apps*. It asks whether to delete your data too, and is refused while a
+block is locked or a freeze is running.
+
+For scripted installs: `setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART [/USER=<SID>]
+[/LOG=<file>]` (`/USER` picks who may control DeepWork, by default whoever started the installer),
+and `"C:\Program Files\DeepWork\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES [/PURGE=1]`.
+Without `/LOG` the installer still writes a log to `%TEMP%\Setup Log <date>.txt`.
 
 Both packages are native builds, app included. DeepWork has had little testing on Windows so far. Please report what doesn't work.
 

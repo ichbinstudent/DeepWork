@@ -10,15 +10,14 @@ use std::ptr::null_mut;
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
-    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
+    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, IsWellKnownSid,
-    PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
-    TokenElevation, TokenUser, WinLocalSystemSid,
+    GetTokenInformation, IsWellKnownSid, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
+    TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER, TokenElevation, TokenUser, WinLocalSystemSid,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX,
@@ -32,7 +31,7 @@ use windows_sys::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 
-use crate::server::{handle_conn, permitted};
+use crate::server::{Caller, Slot, UserId, handle_conn, permitted};
 use crate::state::Daemon;
 
 /// SYSTEM and administrators get full access. Other signed-in users may read
@@ -41,7 +40,11 @@ use crate::state::Daemon;
 const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012008b;;;AU)";
 
 /// Serve clients on the pipe at `path` until the process ends.
-pub fn serve(path: &Path, daemon: Arc<Mutex<Daemon>>, allowed: Option<Vec<u32>>) -> io::Result<()> {
+pub fn serve(
+    path: &Path,
+    daemon: Arc<Mutex<Daemon>>,
+    allowed: Option<Vec<UserId>>,
+) -> io::Result<()> {
     let name: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
     let sddl: Vec<u16> = SDDL.encode_utf16().chain([0]).collect();
     let mut sd: PSECURITY_DESCRIPTOR = null_mut();
@@ -98,10 +101,16 @@ pub fn serve(path: &Path, daemon: Arc<Mutex<Daemon>>, allowed: Option<Vec<u32>>)
         if !connected {
             continue;
         }
+        let Some(slot) = Slot::take() else {
+            // SAFETY: `pipe` still owns the handle.
+            unsafe { DisconnectNamedPipe(h) };
+            continue;
+        };
         let daemon = daemon.clone();
         let allowed = allowed.clone();
         std::thread::spawn(move || {
-            let ok = permitted(client_uid(&pipe), allowed.as_deref());
+            let _slot = slot;
+            let ok = permitted(client(&pipe).as_ref(), allowed.as_deref());
             handle_conn(&pipe, &pipe, daemon, ok);
             let h = pipe.as_raw_handle() as HANDLE;
             // SAFETY: `pipe` still owns the handle.
@@ -113,10 +122,9 @@ pub fn serve(path: &Path, daemon: Arc<Mutex<Daemon>>, allowed: Option<Vec<u32>>)
     }
 }
 
-/// The caller as a "user id": 0 (like root) for SYSTEM and elevated
-/// administrators, otherwise the last number of their user SID (the relative
-/// id that `whoami /user` ends with). `allowed_users` holds those numbers.
-fn client_uid(pipe: &File) -> Option<u32> {
+/// The caller: an administrator for SYSTEM and elevated administrators,
+/// otherwise their user SID.
+fn client(pipe: &File) -> Option<Caller> {
     // SAFETY: plain Win32 calls with valid out pointers; every handle we open
     // is wrapped in an `OwnedHandle` so it gets closed.
     unsafe {
@@ -147,7 +155,7 @@ fn client_uid(pipe: &File) -> Option<u32> {
         ) != 0
             && elevation.TokenIsElevated != 0
         {
-            return Some(0);
+            return Some(Caller::Admin);
         }
 
         // TOKEN_USER plus the SID it points to; u64s keep it aligned.
@@ -164,13 +172,16 @@ fn client_uid(pipe: &File) -> Option<u32> {
         }
         let sid = (*(buf.as_ptr() as *const TOKEN_USER)).User.Sid;
         if IsWellKnownSid(sid, WinLocalSystemSid) != 0 {
-            return Some(0);
+            return Some(Caller::Admin);
         }
-        let count = *GetSidSubAuthorityCount(sid);
-        if count == 0 {
+        let mut text: *mut u16 = null_mut();
+        if ConvertSidToStringSidW(sid, &mut text) == 0 || text.is_null() {
             return None;
         }
-        Some(*GetSidSubAuthority(sid, u32::from(count) - 1))
+        let len = (0..).take_while(|&i| *text.add(i) != 0).count();
+        let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
+        LocalFree(text.cast());
+        Some(Caller::Sid(s))
     }
 }
 
