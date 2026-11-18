@@ -94,6 +94,14 @@ foreach ($exe in 'deepwork.exe', 'deepwork-daemon.exe', 'deepworkctl.exe') {
 $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Check ((Get-Content "$data\config.json" -Raw) -match [regex]::Escape($me)) 'the installing user may control DeepWork (full SID)'
 Check (Test-Path (Join-Path $dir 'LICENSE')) 'license installed'
+# Signed packages: every program we build, the installer and the uninstaller.
+if ((Get-AuthenticodeSignature $Setup).SignerCertificate) {
+    foreach ($exe in 'deepwork.exe', 'deepwork-daemon.exe', 'deepworkctl.exe', 'unins000.exe') {
+        Check ([bool](Get-AuthenticodeSignature (Join-Path $dir $exe)).SignerCertificate) "$exe is signed"
+    }
+} else {
+    Write-Host 'note: this installer is not signed'
+}
 Check (Test-Path (Join-Path $programs 'DeepWork.lnk')) 'Start menu shortcut'
 Check ((New-Object -ComObject WScript.Shell).CreateShortcut((Join-Path $programs 'StartUp\DeepWork.lnk')).Arguments -eq '--background') 'starts in the tray at sign-in'
 
@@ -109,6 +117,22 @@ Check ((Get-ItemProperty $chrome).DnsOverHttpsMode -eq 'off') "Chrome's secure D
 Check ((Get-Acl $data).Owner -match 'Administrators|S-1-5-32-544') 'data folder belongs to administrators'
 Check ((Get-Content "$data\deepwork.log" -Raw) -match 'service started') 'the service writes a readable log'
 Check ((Get-Content "$data\state\state.json" -Raw) -match 'example.com') 'administrators can read the state'
+
+# Microsoft Defender, where the runner has it running: nothing of ours is
+# flagged, and it leaves the blocks in the hosts file alone.
+$defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
+if ($defender -and $defender.AntivirusEnabled -and $defender.RealTimeProtectionEnabled) {
+    Update-MpSignature -ErrorAction SilentlyContinue
+    Start-MpScan -ScanType CustomScan -ScanPath $dir
+    Start-MpScan -ScanType CustomScan -ScanPath $Setup
+    $found = @(Get-MpThreatDetection -ErrorAction SilentlyContinue)
+    $found | Format-List | Out-String | Write-Host
+    Check ($found.Count -eq 0) 'Microsoft Defender finds nothing in DeepWork'
+    Start-Sleep -Seconds 5
+    Check ((Get-Content $hosts -Raw) -match '0\.0\.0\.0\s+example\.com') 'the hosts file still blocks after the scan'
+} else {
+    Write-Host "note: Microsoft Defender isn't running on this runner"
+}
 
 # The app, from the installed copy (MSYS2 isn't on the PATH here, so the
 # bundle must be complete).

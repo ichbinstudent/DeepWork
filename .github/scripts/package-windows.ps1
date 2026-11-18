@@ -65,13 +65,39 @@ foreach ($p in $programs) {
     if ($LASTEXITCODE -ne 0) { throw "rcedit failed on $($p.File)" }
 }
 
+# Authenticode signing, when a certificate is configured: WINDOWS_SIGN_PFX
+# (the .pfx file, base64) and WINDOWS_SIGN_PASSWORD (repository secrets).
+# Signs our programs here, and the installer and uninstaller through ISCC.
+$sign = $null
+if ($env:WINDOWS_SIGN_PFX) {
+    $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+        Sort-Object FullName | Select-Object -Last 1 -ExpandProperty FullName
+    if (-not $signtool) { throw 'signtool.exe not found' }
+    $pfx = Join-Path $env:RUNNER_TEMP 'deepwork-sign.pfx'
+    [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_SIGN_PFX))
+    $sign = @('sign', '/f', $pfx, '/p', $env:WINDOWS_SIGN_PASSWORD, '/fd', 'sha256',
+        '/tr', 'http://timestamp.digicert.com', '/td', 'sha256', '/d', 'DeepWork')
+    foreach ($p in $programs) {
+        & $signtool @sign (Join-Path $stage $p.File)
+        if ($LASTEXITCODE -ne 0) { throw "signing $($p.File) failed" }
+    }
+} else {
+    Write-Host 'Not signing: no certificate configured (WINDOWS_SIGN_PFX).'
+}
+
 # Licenses of the Rust crates (the MSYS2 ones came with the app bundle).
 python .github/scripts/third_party_notices.py (Join-Path $stage 'THIRD-PARTY-NOTICES.txt')
 if ($LASTEXITCODE -ne 0) { throw 'third_party_notices.py failed' }
 
 New-Item -ItemType Directory -Force $Out | Out-Null
 $outDir = (Resolve-Path $Out).Path
-& $iscc /Q "/DVersion=$version" "/DArch=$Arch" "/DSource=$stage" "/DOutput=$outDir" windows\deepwork.iss
+$isccArgs = @('/Q', "/DVersion=$version", "/DArch=$Arch", "/DSource=$stage", "/DOutput=$outDir")
+if ($sign) {
+    # ISCC runs this for the installer and the uninstaller ($f is the file).
+    $quoted = ($sign | ForEach-Object { if ($_ -match ' ') { "`"$_`"" } else { $_ } }) -join ' '
+    $isccArgs += @('/DSign', "/Ssigntool=`"$signtool`" $quoted `$f")
+}
+& $iscc @isccArgs windows\deepwork.iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
 
 # Debug information, published next to the installer: PDBs of the service

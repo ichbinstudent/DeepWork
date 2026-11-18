@@ -204,6 +204,17 @@ jobs:
           rustup toolchain install
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
+      # Exercise the signing path with a throwaway self-signed certificate
+      # (releases use the real one from the repository secrets).
+      - name: Test certificate
+        shell: pwsh
+        run: |
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=DeepWork CI test' -CertStoreLocation Cert:\CurrentUser\My
+          $pw = [guid]::NewGuid().ToString()
+          $file = Join-Path $env:RUNNER_TEMP 'ci.pfx'
+          Export-PfxCertificate -Cert $cert -FilePath $file -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
+          "WINDOWS_SIGN_PFX=$([Convert]::ToBase64String([IO.File]::ReadAllBytes($file)))" >> $env:GITHUB_ENV
+          "WINDOWS_SIGN_PASSWORD=$pw" >> $env:GITHUB_ENV
       - name: Build the installer
         shell: pwsh
         run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/release -App app-bundle -Out dist

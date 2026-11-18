@@ -56,6 +56,12 @@ Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
 SetupLogging=yes
+#ifdef Sign
+; Sign the installer and the uninstaller (package-windows.ps1 defines the
+; "signtool" command when a certificate is configured).
+SignTool=signtool
+SignedUninstaller=yes
+#endif
 ChangesEnvironment=yes
 CloseApplications=no
 RestartApplications=no
