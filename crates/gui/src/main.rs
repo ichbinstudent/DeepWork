@@ -170,6 +170,7 @@ fn main() -> glib::ExitCode {
     // One copy per user: a second one shows the first one's window instead.
     #[cfg(windows)]
     if std::env::var_os("DEEPWORK_DEBUG_SHOT").is_none()
+        && std::env::var_os("DEEPWORK_DEBUG_FPS").is_none()
         && platform::windows::hand_over_to_running_copy(background)
     {
         return glib::ExitCode::SUCCESS;
