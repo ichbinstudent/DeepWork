@@ -181,7 +181,12 @@ impl Tray {
 
     fn add(&self) {
         if !self.notify(NIM_ADD) {
-            eprintln!("deepwork: cannot add the tray icon");
+            // Usually the taskbar isn't there yet (early at sign-in); it
+            // announces itself with TaskbarCreated, and then this runs again.
+            eprintln!(
+                "deepwork: cannot add the tray icon yet: {}",
+                std::io::Error::last_os_error()
+            );
             return;
         }
         let mut data = self.data();

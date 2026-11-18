@@ -109,7 +109,12 @@ if ($App) {
         }
         Get-Content $log -ErrorAction SilentlyContinue
         Check (Test-Path $env:DEEPWORK_DEBUG_SHOT) "screenshot of $page"
-        Check ((Get-Content $log -Raw) -match 'tray icon added') "tray icon ($page)"
+        # Only where the runner has a taskbar (Explorer) to show it in.
+        if (Get-Process explorer -ErrorAction SilentlyContinue) {
+            Check ((Get-Content $log -Raw) -match 'tray icon added') "tray icon ($page)"
+        } else {
+            Write-Host "no taskbar on this runner: tray icon not checked"
+        }
     }
     Remove-Item Env:DEEPWORK_DEBUG_PAGE, Env:DEEPWORK_DEBUG_SHOT, Env:DEEPWORK_DEBUG_SIZE
 }
