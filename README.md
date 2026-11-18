@@ -182,8 +182,7 @@ DeepWork (and administrators) may control it; others can be added to `allowed_us
 administrator can end the scheduled task. Double-click `uninstall.cmd` to remove DeepWork (run
 `uninstall.ps1 -Purge` to delete your data too).
 
-The app for ARM PCs is the x64 build, which Windows runs through emulation. DeepWork has had little
-testing on Windows so far. Please report what doesn't work.
+Both packages are native builds, app included. DeepWork has had little testing on Windows so far. Please report what doesn't work.
 
 ## How it works
 
@@ -241,8 +240,8 @@ the lock menu).
 | App | ✅ | — | ✅ (no tray icon yet) |
 | Tray icon, running-app picker | ✅ | — | — |
 
-The Windows backend is checked in CI (x64 and ARM), and an end-to-end test installs the package on a
-Windows runner, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and
+The Windows backend is checked in CI, and an end-to-end test installs the package on x64 and ARM
+Windows runners, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and
 uninstalls again. It hasn't been used on real machines much yet. The macOS backend compiles but has never run; CI doesn't check it while
 the repository is private. Each module's documentation lists what's still needed.
 

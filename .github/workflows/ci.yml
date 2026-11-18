@@ -73,21 +73,30 @@ jobs:
           rustup target add aarch64-pc-windows-msvc
           cargo clippy --target aarch64-pc-windows-msvc -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
 
-  # The GTK app for Windows (built with MSYS2), then an end-to-end test of
-  # the whole package: install, block, check, uninstall, with screenshots.
+  # The GTK app for Windows (built with MSYS2, natively for x64 and ARM64),
+  # then an end-to-end test of the whole package: install, block, check,
+  # uninstall, with screenshots.
   windows-app:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-latest
+            msystem: UCRT64
+          - arch: arm64
+            runner: windows-11-arm
+            msystem: CLANGARM64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
+          msystem: ${{ matrix.msystem }}
           update: true
           cache: true
-          install: >-
-            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-rust
-            mingw-w64-ucrt-x86_64-gtk4 mingw-w64-ucrt-x86_64-libadwaita
-            mingw-w64-ucrt-x86_64-librsvg mingw-w64-ucrt-x86_64-adwaita-icon-theme
+          pacboy: >-
+            cc:p pkgconf:p rust:p gtk4:p libadwaita:p librsvg:p adwaita-icon-theme:p
       - name: Build and bundle the app
         shell: msys2 {0}
         env:
@@ -95,6 +104,15 @@ jobs:
         run: |
           cargo build --release --locked -p deepwork
           .github/scripts/bundle-windows-app.sh app-bundle
+      - name: Install Rust
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ('${{ matrix.arch }}' -eq 'arm64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --profile minimal
+            "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
+          }
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
       - name: End-to-end test
@@ -103,5 +121,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-app-screenshots
+          name: windows-app-screenshots-${{ matrix.arch }}
           path: ${{ runner.temp }}/shots

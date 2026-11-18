@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Collect the GTK app and everything it needs from MSYS2 (UCRT64) into DIR:
+# Collect the GTK app and everything it needs from MSYS2 (UCRT64 or
+# CLANGARM64) into DIR:
 # DLLs, the SVG image loader, icons and GSettings schemas. GTK finds share/
 # and lib/ next to its DLLs, so the folder works wherever it is copied.
-#   usage (in an MSYS2 UCRT64 shell, after cargo build --release -p deepwork):
+#   usage (in an MSYS2 shell, after cargo build --release -p deepwork):
 #   bundle-windows-app.sh DIR
 set -euxo pipefail
 out=$1
@@ -25,14 +26,27 @@ rm "$out/loaders.cache.tmp"
 cat "$out/$loaders/loaders.cache.in"
 grep -q '@LOADERS_DIR@' "$out/$loaders/loaders.cache.in"
 
-# Every MSYS2 DLL that the app or the loader pulls in.
-for f in "$out/deepwork.exe" "$out/$loaders/loaders/"*.dll; do
-    ldd "$f" | awk '{print $3}' | grep -i "^$prefix/bin/" || true
-done | sort -u >"$out/dlls.txt"
-while read -r dll; do
-    [ -e "$out/$(basename "$dll")" ] || cp "$dll" "$out/"
-done <"$out/dlls.txt"
-rm "$out/dlls.txt"
+# Every MSYS2 DLL that the app or the loader pulls in, found through the
+# import tables (works for x64 and ARM64 alike).
+set +x
+objdump=$(command -v llvm-objdump || command -v objdump)
+declare -A seen
+queue=("$out/deepwork.exe" "$out/$loaders/loaders/"*.dll)
+while ((${#queue[@]})); do
+    f=${queue[0]}
+    queue=("${queue[@]:1}")
+    for name in $("$objdump" -p "$f" | sed -n 's/^[[:space:]]*DLL Name: //p' | tr -d '\r'); do
+        key=${name,,}
+        [ -z "${seen[$key]:-}" ] || continue
+        seen[$key]=1
+        src="$prefix/bin/$name"
+        [ -e "$src" ] || continue # part of Windows
+        [ -e "$out/$name" ] || cp "$src" "$out/"
+        queue+=("$src")
+    done
+done
+echo "DLLs: $(ls "$out"/*.dll | wc -l)"
+set -x
 
 # Icons: Adwaita for the interface, hicolor for the app's own icon.
 mkdir -p "$out/share/icons/hicolor/scalable/apps"
