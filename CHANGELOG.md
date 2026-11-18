@@ -30,5 +30,15 @@ First release, in beta.
 - Not yet on Windows: app blocking, Freeze, network protections, the *Until restart* lock and
   hardcore mode.
 
+### Known limitations of this beta
+
+- The Windows installers aren't code-signed yet: SmartScreen warns about them (*More info → Run
+  anyway*), and some antivirus programs may be wary of a program that edits the hosts file.
+- Tested automatically on Windows 11 ARM64, Windows Server 2025 x64, Debian 13 and Fedora 42
+  (including a Microsoft Defender scan), but only lightly by hand on real PCs and desktops.
+  Please report what doesn't work.
+- An administrator can always end a block by stopping the service; see the
+  [known limitations](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md#known-limitations).
+
 [Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ichbinstudent/deepwork/releases/tag/v0.1.0
