@@ -89,6 +89,8 @@ Check ($avg -lt 100) 'the pipe answers quickly'
 if ($App) {
     $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk'
     Check (Test-Path $menu) 'Start menu shortcut'
+    $startup = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\DeepWork.lnk'
+    Check ((New-Object -ComObject WScript.Shell).CreateShortcut($startup).Arguments -eq '--background') 'starts in the tray at sign-in'
     $shots = Join-Path $env:RUNNER_TEMP 'shots'
     New-Item -ItemType Directory -Force $shots | Out-Null
     foreach ($page in 'focus', 'blocks', 'settings') {
@@ -107,6 +109,7 @@ if ($App) {
         }
         Get-Content $log -ErrorAction SilentlyContinue
         Check (Test-Path $env:DEEPWORK_DEBUG_SHOT) "screenshot of $page"
+        Check ((Get-Content $log -Raw) -match 'tray icon added') "tray icon ($page)"
     }
     Remove-Item Env:DEEPWORK_DEBUG_PAGE, Env:DEEPWORK_DEBUG_SHOT, Env:DEEPWORK_DEBUG_SIZE
 }
@@ -140,6 +143,7 @@ Check ($LASTEXITCODE -eq 0) 'uninstall.ps1 -Purge'
 Check (-not (Test-Path $dir)) 'programs removed'
 Check (-not (Test-Path $data)) 'data removed'
 Check (-not (Get-ScheduledTask DeepWork -ErrorAction SilentlyContinue)) 'scheduled task removed'
+Check (-not (Test-Path (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\StartUp\DeepWork.lnk'))) 'sign-in shortcut removed'
 Check (-not ((Get-Content $hosts -Raw) -match 'example\.(com|org)')) 'hosts file clean'
 Check (-not ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' -contains $dir)) 'PATH cleaned'
 Write-Host 'All Windows end-to-end checks passed.' -ForegroundColor Green

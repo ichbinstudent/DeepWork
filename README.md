@@ -160,8 +160,9 @@ while a block is locked or a freeze is running.
 
 Download `deepwork-<version>-windows-x64.zip` (or `-arm64` for ARM PCs), unpack it and double-click
 **`install.cmd`**. It asks for administrator rights, copies DeepWork to `C:\Program Files\DeepWork`,
-adds it to the Start menu, puts `deepworkctl` on the PATH and starts the service. Run it again to
-update; your blocks are kept.
+adds it to the Start menu, puts `deepworkctl` on the PATH and starts the service. From the next
+sign-in, DeepWork waits in the notification area: click its icon to open it, right-click for a menu
+to start, extend or stop blocks. Run `install.cmd` again to update; your blocks are kept.
 
 On Windows, DeepWork blocks websites through the hosts file and browser policies (Chrome, Edge, Brave
 and Firefox), so proxy and VPN extensions in those browsers don't get around a block. App blocking,
@@ -237,8 +238,9 @@ the lock menu).
 | *Until restart* lock | ✅ | ✅ (untested) | — |
 | Hardcore lock | ✅ | — | — |
 | Service ↔ app connection | Unix socket | Unix socket | named pipe |
-| App | ✅ | — | ✅ (no tray icon yet) |
-| Tray icon, running-app picker | ✅ | — | — |
+| App | ✅ | — | ✅ |
+| Tray icon | ✅ | — | ✅ |
+| Running-app picker | ✅ | — | — |
 
 The Windows backend is checked in CI, and an end-to-end test installs the package on x64 and ARM
 Windows runners, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and

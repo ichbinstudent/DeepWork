@@ -155,6 +155,13 @@ fn main() -> glib::ExitCode {
     gio::resources_register_include!("deepwork.gresource").expect("embedded resources");
 
     let background = std::env::args().any(|a| a == "--background");
+    // One copy per user: a second one shows the first one's window instead.
+    #[cfg(windows)]
+    if std::env::var_os("DEEPWORK_DEBUG_SHOT").is_none()
+        && platform::windows::hand_over_to_running_copy(background)
+    {
+        return glib::ExitCode::SUCCESS;
+    }
     let adw_app = adw::Application::builder().application_id(APP_ID).build();
     let app = Rc::new(App {
         app: adw_app.clone(),
@@ -198,11 +205,11 @@ fn main() -> glib::ExitCode {
             store.refresh();
             store.refresh_stats();
 
-            // Top-bar indicator.
-            if let Some(conn) = gapp.dbus_connection() {
+            // Top-bar / system-tray indicator.
+            {
                 let (a1, a2) = (Rc::downgrade(&app), Rc::downgrade(&app));
                 let tray = Tray::start(
-                    conn,
+                    gapp,
                     move |action| {
                         if let Some(app) = a1.upgrade() {
                             app.handle(action);

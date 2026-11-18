@@ -76,18 +76,25 @@ if (($path -split ';') -notcontains $dir) {
     [Environment]::SetEnvironmentVariable('Path', "$path;$dir", 'Machine')
 }
 
-# Start menu entry for the app, if this package has it.
+# Start menu entry for the app, if this package has it, and its tray icon
+# at sign-in (for every user).
 $app = Join-Path $dir 'deepwork.exe'
 if (Test-Path $app) {
     $shell = New-Object -ComObject WScript.Shell
-    $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk'
-    $link = $shell.CreateShortcut($menu)
-    $link.TargetPath = $app
-    $link.WorkingDirectory = $dir
-    $link.Description = 'Block distracting websites and apps'
-    $ico = Join-Path $dir 'deepwork.ico'
-    if (Test-Path $ico) { $link.IconLocation = $ico }
-    $link.Save()
+    $programs = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+    foreach ($entry in @(
+        @{ Path = (Join-Path $programs 'DeepWork.lnk'); Args = '' },
+        @{ Path = (Join-Path $programs 'StartUp\DeepWork.lnk'); Args = '--background' }
+    )) {
+        $link = $shell.CreateShortcut($entry.Path)
+        $link.TargetPath = $app
+        $link.Arguments = $entry.Args
+        $link.WorkingDirectory = $dir
+        $link.Description = 'Block distracting websites and apps'
+        $ico = Join-Path $dir 'deepwork.ico'
+        if (Test-Path $ico) { $link.IconLocation = $ico }
+        $link.Save()
+    }
 }
 
 # Wait until the service answers.
@@ -108,7 +115,8 @@ if ($ok) {
     Write-Host "DeepWork is installed, but the service didn't answer yet. See $data\deepwork.log" -ForegroundColor Yellow
 }
 if (Test-Path $app) {
-    Write-Host 'Open DeepWork from the Start menu, or use the command line.'
+    Write-Host 'Open DeepWork from the Start menu (from your next sign-in it also waits in the'
+    Write-Host 'notification area), or use the command line.'
 }
 Write-Host 'In a new terminal:'
 Write-Host '  deepworkctl lists                          built-in filter lists'

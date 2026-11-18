@@ -11,21 +11,20 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
 
-use deepwork_core::model::LockKind;
-use deepwork_core::protocol::{BlockStatus, Status};
-use deepwork_core::{format_duration, format_time};
 use gtk::gio;
 use gtk::glib::{self, Variant};
 use gtk::prelude::*;
 
 use crate::platform::Action;
+use crate::platform::tray_menu::{
+    ICONS, Item, Look, compute, icon_svg, load_show_timer, render, save_show_timer,
+};
 use crate::store::Store;
 
 const ITEM_PATH: &str = "/StatusNotifierItem";
 const MENU_PATH: &str = "/MenuBar";
 const ITEM_IFACE: &str = "org.kde.StatusNotifierItem";
 const MENU_IFACE: &str = "com.canonical.dbusmenu";
-const ICONS: &[&str] = &["idle", "active", "locked", "break", "frozen", "offline"];
 
 const XML: &str = r#"<node>
 <interface name="org.kde.StatusNotifierItem">
@@ -115,59 +114,6 @@ const XML: &str = r#"<node>
 </interface>
 </node>"#;
 
-#[derive(Debug, Clone, PartialEq)]
-struct Item {
-    label: String,
-    enabled: bool,
-    separator: bool,
-    toggle: Option<bool>,
-    action: Option<Action>,
-    children: Vec<Item>,
-}
-
-impl Item {
-    fn new(label: impl Into<String>, action: Action) -> Self {
-        Self {
-            label: label.into(),
-            enabled: true,
-            separator: false,
-            toggle: None,
-            action: Some(action),
-            children: vec![],
-        }
-    }
-    fn info(label: impl Into<String>) -> Self {
-        Self {
-            label: label.into(),
-            enabled: false,
-            separator: false,
-            toggle: None,
-            action: None,
-            children: vec![],
-        }
-    }
-    fn submenu(label: impl Into<String>, children: Vec<Item>) -> Self {
-        Self {
-            label: label.into(),
-            enabled: true,
-            separator: false,
-            toggle: None,
-            action: None,
-            children,
-        }
-    }
-    fn separator() -> Self {
-        Self {
-            label: String::new(),
-            enabled: true,
-            separator: true,
-            toggle: None,
-            action: None,
-            children: vec![],
-        }
-    }
-}
-
 /// Menu items flattened with stable ids (0 is the root).
 #[derive(Default)]
 struct Menu {
@@ -229,14 +175,6 @@ impl Menu {
     }
 }
 
-#[derive(Debug, Clone, Default, PartialEq)]
-struct Look {
-    icon: &'static str,
-    title: String,
-    label: String,
-    tooltip: String,
-}
-
 /// Icon pixmap as sent over D-Bus: width, height, ARGB32 bytes.
 type Pixmap = (i32, i32, Vec<u8>);
 
@@ -256,36 +194,6 @@ pub struct Tray {
 }
 
 // ----------------------------------------------------------------------------- helpers
-
-fn settings_path() -> PathBuf {
-    glib::user_config_dir()
-        .join("deepwork")
-        .join("settings.json")
-}
-
-fn load_show_timer() -> bool {
-    std::fs::read_to_string(settings_path())
-        .ok()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-        .and_then(|v| v.get("show_timer").and_then(|b| b.as_bool()))
-        .unwrap_or(true)
-}
-
-fn save_show_timer(on: bool) {
-    let p = settings_path();
-    if let Some(dir) = p.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(p, serde_json::json!({ "show_timer": on }).to_string());
-}
-
-fn icon_svg(name: &str) -> Option<glib::Bytes> {
-    gio::resources_lookup_data(
-        &format!("/io/github/ichbinstudent/DeepWork/tray/deepwork-{name}-symbolic.svg"),
-        gio::ResourceLookupFlags::NONE,
-    )
-    .ok()
-}
 
 /// Write the icons where the tray host can find them by name.
 fn install_icons() -> PathBuf {
@@ -309,27 +217,9 @@ fn install_icons() -> PathBuf {
 /// Bitmap fallback for hosts that can't load icons by name: white glyphs,
 /// ARGB32 in network byte order as the spec requires.
 fn render_pixmaps(name: &str) -> Vec<Pixmap> {
-    let Some(svg) = icon_svg(name) else {
-        return vec![];
-    };
-    let white = String::from_utf8_lossy(&svg).replace("#222", "#ffffff");
     let mut out = vec![];
     for size in [22, 32, 48] {
-        let stream = gio::MemoryInputStream::from_bytes(&glib::Bytes::from(white.as_bytes()));
-        let Ok(pb) = gtk::gdk_pixbuf::Pixbuf::from_stream_at_scale(
-            &stream,
-            size,
-            size,
-            true,
-            gio::Cancellable::NONE,
-        ) else {
-            continue;
-        };
-        let Ok(pb) = (if pb.has_alpha() {
-            Ok(pb)
-        } else {
-            pb.add_alpha(false, 0, 0, 0)
-        }) else {
+        let Some(pb) = render(name, size, "#ffffff") else {
             continue;
         };
         let (w, h, stride, n) = (
@@ -351,192 +241,17 @@ fn render_pixmaps(name: &str) -> Vec<Pixmap> {
     out
 }
 
-/// "1h 05m", "42m", "<1m"
-fn short_clock(secs: f64) -> String {
-    let m = (secs / 60.0).ceil() as u64;
-    if m >= 60 {
-        format!("{}h {:02}m", m / 60, m % 60)
-    } else {
-        format!("{m}m")
-    }
-}
-
-fn block_left(b: &BlockStatus, now: f64) -> String {
-    match b.window_end {
-        Some(end) => format!(
-            "{} left",
-            format_duration(((end - now) / 60.0).ceil() * 60.0)
-        ),
-        None => String::new(),
-    }
-}
-
-// ----------------------------------------------------------------------------- state -> look/menu
-
-fn compute(status: Option<&Status>, now: f64, show_timer: bool) -> (Look, Vec<Item>) {
-    let mut items = vec![];
-    let Some(s) = status else {
-        let look = Look {
-            icon: "offline",
-            title: "DeepWork".into(),
-            label: String::new(),
-            tooltip: "The DeepWork service isn't running".into(),
-        };
-        items.push(Item::info("Service isn't running"));
-        items.push(Item::separator());
-        items.push(Item::new("Open DeepWork", Action::Open(None)));
-        items.push(Item::new("Quit", Action::Quit));
-        return (look, items);
-    };
-
-    let active: Vec<&BlockStatus> = s.blocks.iter().filter(|b| b.active).collect();
-    let idle: Vec<&BlockStatus> = s.blocks.iter().filter(|b| !b.active).collect();
-    let frozen = s.frozen_until > now;
-    let enforcing = active.iter().any(|b| b.enforcing);
-    let end = active
-        .iter()
-        .filter_map(|b| b.window_end)
-        .fold(0.0, f64::max);
-
-    let (icon, headline, label) = if frozen {
-        (
-            "frozen",
-            format!("Frozen until {}", format_time(s.frozen_until)),
-            short_clock(s.frozen_until - now),
-        )
-    } else if !active.is_empty() && !enforcing {
-        let back = active
-            .iter()
-            .map(|b| {
-                if b.paused {
-                    b.pause_until
-                } else {
-                    now + b.pomodoro.map(|p| p.1).unwrap_or(0.0)
-                }
-            })
-            .fold(f64::MAX, f64::min);
-        (
-            "break",
-            format!("On a break until {}", format_time(back)),
-            format!("☕ {}", short_clock(back - now)),
-        )
-    } else if enforcing {
-        let locked = active.iter().any(|b| b.locked);
-        (
-            if locked { "locked" } else { "active" },
-            format!(
-                "Blocking until {}{}",
-                format_time(end),
-                if locked { " · locked" } else { "" }
-            ),
-            short_clock(end - now),
-        )
-    } else {
-        ("idle", "Not blocking anything".to_string(), String::new())
-    };
-
-    items.push(Item::info(headline.clone()));
-
-    if !active.is_empty() {
-        items.push(Item::separator());
-        for b in &active {
-            let mut sub = vec![
-                Item::new("Add 15 minutes", Action::AddTime(b.id.clone(), 15)),
-                Item::new("Add 1 hour", Action::AddTime(b.id.clone(), 60)),
-            ];
-            if b.paused {
-                sub.push(Item::new("End break", Action::EndBreak(b.id.clone())));
-            } else if b.config.allowance_minutes > 0 && b.allowance_left >= 60.0 {
-                sub.push(Item::new(
-                    format!(
-                        "Take a break… ({} left today)",
-                        format_duration(b.allowance_left)
-                    ),
-                    Action::Break(b.id.clone()),
-                ));
-            }
-            sub.push(Item::separator());
-            if !b.locked {
-                sub.push(Item::new("Stop", Action::Stop(b.id.clone())));
-            } else if !b.protected && matches!(b.config.lock, LockKind::Random | LockKind::Password)
-            {
-                sub.push(Item::new("Unlock…", Action::Unlock(b.id.clone())));
-            } else {
-                sub.push(Item::info(match b.config.lock {
-                    LockKind::Restart => "Locked until restart",
-                    _ => "Locked until it ends",
-                }));
-            }
-            let state = if b.on_break {
-                "on a break".to_string()
-            } else {
-                block_left(b, now)
-            };
-            let lock = if b.locked { "🔒 " } else { "" };
-            items.push(Item::submenu(
-                format!("{lock}{} — {state}", b.config.name),
-                sub,
-            ));
-        }
-    }
-
-    items.push(Item::separator());
-    if !idle.is_empty() {
-        let blocks = idle
-            .iter()
-            .map(|b| {
-                let mut durations: Vec<Item> = [
-                    (25, "25 minutes"),
-                    (60, "1 hour"),
-                    (120, "2 hours"),
-                    (240, "4 hours"),
-                ]
-                .iter()
-                .map(|(m, l)| Item::new(*l, Action::Start(b.id.clone(), *m)))
-                .collect();
-                durations.push(Item::new(
-                    "Other duration…",
-                    Action::StartCustom(b.id.clone()),
-                ));
-                let lock = if b.config.lock != LockKind::None {
-                    " 🔒"
-                } else {
-                    ""
-                };
-                Item::submenu(format!("{}{lock}", b.config.name), durations)
-            })
-            .collect();
-        items.push(Item::submenu("Start a block", blocks));
-    } else if s.blocks.is_empty() {
-        items.push(Item::new("Create a block…", Action::Open(Some("blocks"))));
-    }
-    if !frozen {
-        items.push(Item::new("Freeze computer…", Action::Open(Some("freeze"))));
-    }
-    items.push(Item::separator());
-    let mut timer = Item::new("Show timer in top bar", Action::ToggleTimer);
-    timer.toggle = Some(show_timer);
-    items.push(timer);
-    items.push(Item::new("Open DeepWork", Action::Open(None)));
-    items.push(Item::new("Quit", Action::Quit));
-
-    let look = Look {
-        icon,
-        title: "DeepWork".into(),
-        label: if show_timer { label } else { String::new() },
-        tooltip: headline,
-    };
-    (look, items)
-}
-
 // ----------------------------------------------------------------------------- D-Bus plumbing
 
 impl Tray {
     pub fn start(
-        conn: gio::DBusConnection,
+        app: &adw::Application,
         on_action: impl Fn(Action) + 'static,
         on_registered: impl Fn() + 'static,
     ) -> Result<Rc<Self>, glib::Error> {
+        let conn = app.dbus_connection().ok_or_else(|| {
+            glib::Error::new(gio::IOErrorEnum::NotConnected, "no D-Bus session bus")
+        })?;
         let node = gio::DBusNodeInfo::for_xml(XML)?;
         let bus_name = format!("org.kde.StatusNotifierItem-{}-1", std::process::id());
         let tray = Rc::new(Tray {
@@ -755,7 +470,11 @@ impl Tray {
     /// Recompute icon, label and menu from the latest status.
     pub fn update(&self, store: &Store) {
         let status = store.status();
-        let (look, items) = compute(status.as_ref(), deepwork_core::now(), self.show_timer.get());
+        let (look, items) = compute(
+            status.as_ref(),
+            deepwork_core::now(),
+            Some(self.show_timer.get()),
+        );
         let old = self.look.replace(look.clone());
         if old.icon != look.icon {
             self.emit_item("NewIcon", None);
@@ -796,80 +515,11 @@ impl Tray {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deepwork_core::model::BlockConfig;
-
-    fn block(active: bool, locked: bool) -> BlockStatus {
-        BlockStatus {
-            id: "b1".into(),
-            config: BlockConfig {
-                name: "Social".into(),
-                lock: LockKind::Random,
-                ..Default::default()
-            },
-            has_password: false,
-            active,
-            enforcing: active,
-            locked,
-            on_break: false,
-            paused: false,
-            session_until: 0.0,
-            window_start: active.then_some(0.0),
-            window_end: active.then_some(3900.0),
-            pause_until: 0.0,
-            pomodoro: None,
-            allowance_left: 0.0,
-            lock_reason: None,
-            protected: false,
-        }
-    }
-
-    fn status(blocks: Vec<BlockStatus>) -> Status {
-        Status {
-            version: "x".into(),
-            now: 0.0,
-            frozen_until: 0.0,
-            blocks,
-            settings: Default::default(),
-            net: Default::default(),
-            hardcore: Default::default(),
-            capabilities: Default::default(),
-        }
-    }
-
-    #[test]
-    fn idle_and_offline() {
-        let (look, items) = compute(None, 0.0, true);
-        assert_eq!(look.icon, "offline");
-        assert!(items.iter().any(|i| i.action == Some(Action::Quit)));
-        let (look, items) = compute(Some(&status(vec![block(false, false)])), 0.0, true);
-        assert_eq!(look.icon, "idle");
-        assert_eq!(look.label, "");
-        assert!(items.iter().any(|i| i.label == "Start a block"));
-    }
-
-    #[test]
-    fn locked_block_shows_timer_and_unlock() {
-        let (look, items) = compute(Some(&status(vec![block(true, true)])), 0.0, true);
-        assert_eq!(look.icon, "locked");
-        assert_eq!(look.label, "1h 05m");
-        let sub = items.iter().find(|i| i.label.contains("Social")).unwrap();
-        assert!(
-            sub.children
-                .iter()
-                .any(|c| c.action == Some(Action::Unlock("b1".into())))
-        );
-        assert!(
-            !sub.children
-                .iter()
-                .any(|c| c.action == Some(Action::Stop("b1".into())))
-        );
-        let (look, _) = compute(Some(&status(vec![block(true, true)])), 0.0, false);
-        assert_eq!(look.label, "");
-    }
+    use crate::platform::tray_menu::test_util::*;
 
     #[test]
     fn menu_layout_ids() {
-        let (_, items) = compute(Some(&status(vec![block(true, false)])), 0.0, true);
+        let (_, items) = compute(Some(&status(vec![block(true, false)])), 0.0, Some(true));
         let m = Menu::build(items);
         let (id, _, children) = m.layout(0, -1);
         assert_eq!(id, 0);

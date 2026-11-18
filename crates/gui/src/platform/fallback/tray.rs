@@ -12,7 +12,7 @@ pub struct Tray;
 
 impl Tray {
     pub fn start(
-        _conn: gio::DBusConnection,
+        _app: &adw::Application,
         _on_action: impl Fn(Action) + 'static,
         _on_registered: impl Fn() + 'static,
     ) -> Result<Rc<Self>, glib::Error> {

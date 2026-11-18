@@ -58,7 +58,8 @@ if (Test-Path $daemon) { & $daemon --cleanup }
 
 Write-Host 'Removing the programs...'
 Remove-Item -Recurse -Force $dir -ErrorAction SilentlyContinue
-Remove-Item -Force (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk') -ErrorAction SilentlyContinue
+$programs = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'
+Remove-Item -Force (Join-Path $programs 'DeepWork.lnk'), (Join-Path $programs 'StartUp\DeepWork.lnk') -ErrorAction SilentlyContinue
 $path = [Environment]::GetEnvironmentVariable('Path', 'Machine')
 $rest = ($path -split ';' | Where-Object { $_ -and $_ -ne $dir }) -join ';'
 [Environment]::SetEnvironmentVariable('Path', $rest, 'Machine')
