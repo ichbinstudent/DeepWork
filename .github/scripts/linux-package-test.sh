@@ -34,7 +34,11 @@ done
 ok "installed, programs run (libraries found)"
 grep -q 'ExecStart=/usr/bin/deepwork-daemon' /usr/lib/systemd/system/deepwork.service || fail "service unit"
 test -f /usr/share/metainfo/io.github.ichbinstudent.DeepWork.metainfo.xml || fail "AppStream metadata"
-test -f /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt || fail "notices"
+# Container images skip documentation when installing, so ask the package.
+files=$(if command -v dpkg >/dev/null; then dpkg -L deepwork; else rpm -ql deepwork; fi)
+for f in THIRD-PARTY-NOTICES.txt deepworkctl.1.gz deepwork-daemon.8.gz; do
+    grep -q "/$f$" <<<"$files" || fail "$f in the package"
+done
 ok "service unit, desktop metadata and notices installed"
 if grep -q 4242 /etc/deepwork/config.json 2>/dev/null; then
     ok "the installing user (SUDO_UID) may control DeepWork"

@@ -64,23 +64,43 @@ contents:
     packager: deb
   - src: ${STAGE}/man/deepwork.1.gz
     dst: /usr/share/man/man1/deepwork.1.gz
+    packager: deb
+  - src: ${STAGE}/man/deepwork.1.gz
+    dst: /usr/share/man/man1/deepwork.1.gz
     type: doc
+    packager: rpm
+  - src: ${STAGE}/man/deepworkctl.1.gz
+    dst: /usr/share/man/man1/deepworkctl.1.gz
+    packager: deb
   - src: ${STAGE}/man/deepworkctl.1.gz
     dst: /usr/share/man/man1/deepworkctl.1.gz
     type: doc
+    packager: rpm
+  - src: ${STAGE}/man/deepwork-daemon.8.gz
+    dst: /usr/share/man/man8/deepwork-daemon.8.gz
+    packager: deb
   - src: ${STAGE}/man/deepwork-daemon.8.gz
     dst: /usr/share/man/man8/deepwork-daemon.8.gz
     type: doc
+    packager: rpm
   - src: LICENSE
     dst: /usr/share/licenses/deepwork/LICENSE
     type: license
     packager: rpm
   - src: README.md
     dst: /usr/share/doc/deepwork/README.md
+    packager: deb
+  - src: README.md
+    dst: /usr/share/doc/deepwork/README.md
     type: doc
+    packager: rpm
+  - src: ${STAGE}/THIRD-PARTY-NOTICES.txt
+    dst: /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt
+    packager: deb
   - src: ${STAGE}/THIRD-PARTY-NOTICES.txt
     dst: /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt
     type: doc
+    packager: rpm
 
 scripts:
   postinstall: packaging/linux/postinst.sh
