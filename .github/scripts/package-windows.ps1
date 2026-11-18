@@ -94,8 +94,11 @@ $outDir = (Resolve-Path $Out).Path
 $isccArgs = @('/Q', "/DVersion=$version", "/DArch=$Arch", "/DSource=$stage", "/DOutput=$outDir")
 if ($sign) {
     # ISCC runs this for the installer and the uninstaller ($f is the file).
+    # A wrapper in a path without spaces, so the command needs no quoting.
+    $wrapper = Join-Path $env:RUNNER_TEMP 'deepwork-sign.cmd'
     $quoted = ($sign | ForEach-Object { if ($_ -match ' ') { "`"$_`"" } else { $_ } }) -join ' '
-    $isccArgs += @('/DSign', "/Ssigntool=`"$signtool`" $quoted `$f")
+    Set-Content -Encoding ascii $wrapper "@`"$signtool`" $quoted %*"
+    $isccArgs += @('/DSign', "/Ssigntool=$wrapper `$f")
 }
 & $iscc @isccArgs windows\deepwork.iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
