@@ -16,8 +16,19 @@ trap 'rm -rf "$work"' EXIT
 
 python3 .github/scripts/third_party_notices.py "$work/THIRD-PARTY-NOTICES.txt"
 
-# Tarball with the install script.
+# Stripped programs; their debug information goes into a separate archive
+# (linked by .gnu_debuglink).
 name="deepwork-$version-linux-x86_64"
+mkdir -p "$work/stripped" "$work/$name-debug"
+for f in deepwork deepwork-daemon deepworkctl; do
+    objcopy --only-keep-debug "$bin/$f" "$work/$name-debug/$f.debug"
+    strip --strip-debug --strip-unneeded -o "$work/stripped/$f" "$bin/$f"
+    (cd "$work/$name-debug" && objcopy --add-gnu-debuglink="$f.debug" "$work/stripped/$f")
+done
+tar -C "$work" -czf "$out/$name-debug.tar.gz" "$name-debug"
+bin="$work/stripped"
+
+# Tarball with the install script.
 mkdir -p "$work/$name/bin" "$work/$name/assets"
 cp "$bin/deepwork" "$bin/deepwork-daemon" "$bin/deepworkctl" "$work/$name/bin/"
 cp -r data "$work/$name/"
@@ -29,6 +40,8 @@ tar -C "$work" -czf "$out/$name.tar.gz" "$name"
 glibc=$(objdump -T "$bin"/deepwork "$bin"/deepwork-daemon "$bin"/deepworkctl |
     grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -V | tail -1)
 
+# Set PACKAGE_MAINTAINER (a repository variable in CI) to a real address.
+maintainer="${PACKAGE_MAINTAINER:-DeepWork contributors <maintainer@deepwork.invalid>}"
 stage="$work/stage"
 mkdir -p "$stage/bin"
 cp "$bin/deepwork" "$bin/deepwork-daemon" "$bin/deepworkctl" "$stage/bin/"
@@ -40,7 +53,7 @@ Upstream-Name: DeepWork
 Source: https://github.com/ichbinstudent/deepwork
 
 Files: *
-Copyright: DeepWork contributors
+Copyright: 2026 DeepWork contributors
 License: GPL-3.0-or-later
  On Debian systems, the full text of the GNU General Public License
  version 3 can be found in /usr/share/common-licenses/GPL-3.
@@ -48,6 +61,20 @@ License: GPL-3.0-or-later
  The Rust libraries built into the programs are listed, with their
  licenses, in /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt.
 COPYRIGHT
+# Reproducible: dates and gzip headers come from the last commit.
+when=$(git log -1 --format=%ct 2>/dev/null || date +%s)
+mkdir -p "$stage/man"
+for m in packaging/linux/man/*; do
+    gzip -9n <"$m" >"$stage/man/$(basename "$m").gz"
+done
+{
+    echo "deepwork ($version-1) unstable; urgency=medium"
+    echo
+    echo "  * DeepWork $version. See /usr/share/doc/deepwork/README.md and"
+    echo "    https://github.com/ichbinstudent/deepwork/blob/main/CHANGELOG.md"
+    echo
+    echo " -- $maintainer  $(LC_ALL=C date -u -R -d "@$when")"
+} | gzip -9n >"$stage/changelog.Debian.gz"
 
 nfpm=$(command -v nfpm || true)
 if [[ -z "$nfpm" ]]; then
@@ -57,8 +84,6 @@ if [[ -z "$nfpm" ]]; then
     tar -C "$work" -xzf "$work/nfpm.tar.gz" nfpm
     nfpm="$work/nfpm"
 fi
-# Set PACKAGE_MAINTAINER (a repository variable in CI) to a real address.
-maintainer="${PACKAGE_MAINTAINER:-DeepWork contributors <maintainer@deepwork.invalid>}"
 sed -e "s|\${VERSION}|$version|g" -e "s|\${GLIBC}|$glibc|g" -e "s|\${STAGE}|$stage|g" \
     -e "s|\${MAINTAINER}|$maintainer|g" packaging/linux/nfpm.yaml >"$work/nfpm.yaml"
 "$nfpm" package --config "$work/nfpm.yaml" --packager deb --target "$out/deepwork_${version}-1_amd64.deb"

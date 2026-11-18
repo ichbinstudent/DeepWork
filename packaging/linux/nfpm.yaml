@@ -61,6 +61,15 @@ contents:
   - src: ${STAGE}/copyright
     dst: /usr/share/doc/deepwork/copyright
     packager: deb
+  - src: ${STAGE}/changelog.Debian.gz
+    dst: /usr/share/doc/deepwork/changelog.Debian.gz
+    packager: deb
+  - src: ${STAGE}/man/deepwork.1.gz
+    dst: /usr/share/man/man1/deepwork.1.gz
+  - src: ${STAGE}/man/deepworkctl.1.gz
+    dst: /usr/share/man/man1/deepworkctl.1.gz
+  - src: ${STAGE}/man/deepwork-daemon.8.gz
+    dst: /usr/share/man/man8/deepwork-daemon.8.gz
   - src: LICENSE
     dst: /usr/share/licenses/deepwork/LICENSE
     packager: rpm

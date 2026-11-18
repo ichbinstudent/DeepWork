@@ -10,6 +10,14 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     AllowSetForegroundWindow, FindWindowW, GetWindowThreadProcessId, PostMessageW,
 };
 
+/// Tie the app's windows and notifications to its Start menu entry (the
+/// installer gives the shortcut the same id).
+pub fn set_app_id() {
+    let id = wide(crate::APP_ID);
+    // SAFETY: a valid, NUL-terminated string.
+    unsafe { windows_sys::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(id.as_ptr()) };
+}
+
 pub fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain([0]).collect()
 }

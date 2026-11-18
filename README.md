@@ -24,7 +24,8 @@ blocks from a system service with administrator rights, so closing the app doesn
 
 DeepWork 0.x is in **beta**. [Supported systems, features per platform and known
 limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
-[Privacy](docs/PRIVACY.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Privacy](docs/PRIVACY.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md) ·
+[Releasing](docs/RELEASING.md)
 
 ## Features
 

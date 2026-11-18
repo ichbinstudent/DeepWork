@@ -45,17 +45,17 @@ pub fn format_clock(secs: f64) -> String {
 
 /// "17:30" today, "Tue 09:00" within a week, "24 Dec 09:00" otherwise.
 pub fn format_time(ts: f64) -> String {
-    use chrono::{Local, TimeZone};
-    let Some(t) = Local.timestamp_opt(ts.floor() as i64, 0).single() else {
+    let Some(t) = model::local_time(ts) else {
         return String::new();
     };
-    let today = Local::now();
-    if t.date_naive() == today.date_naive() {
-        t.format("%H:%M").to_string()
-    } else if (t - today).num_days().abs() < 6 {
-        t.format("%a %H:%M").to_string()
+    let today = jiff::ZonedDateTime::now();
+    let days_apart = (t.timestamp().as_second() - today.timestamp().as_second()).abs() / 86_400;
+    if t.date() == today.date() {
+        t.strftime("%H:%M").to_string()
+    } else if days_apart < 6 {
+        t.strftime("%a %H:%M").to_string()
     } else {
-        t.format("%-d %b %H:%M").to_string()
+        t.strftime("%-d %b %H:%M").to_string()
     }
 }
 
@@ -112,6 +112,31 @@ pub fn describe_schedule(ranges: &[[u32; 2]]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn times() {
+        let shape = |s: &str| -> String {
+            s.chars()
+                .map(|c| {
+                    if c.is_ascii_digit() {
+                        '9'
+                    } else if c.is_alphabetic() {
+                        'a'
+                    } else {
+                        c
+                    }
+                })
+                .collect()
+        };
+        assert_eq!(shape(&format_time(now())), "99:99");
+        assert_eq!(shape(&format_time(now() + 3.0 * 86_400.0)), "aaa 99:99");
+        let later = format_time(now() + 40.0 * 86_400.0);
+        assert!(
+            matches!(shape(&later).as_str(), "9 aaa 99:99" | "99 aaa 99:99"),
+            "{later}"
+        );
+        assert_eq!(format_time(f64::MAX), "");
+    }
 
     #[test]
     fn schedule_descriptions() {

@@ -18,6 +18,8 @@ use serde::{Deserialize, Serialize};
 const MAX_SESSION_MINUTES: u32 = 60 * 24 * 30;
 const MAX_FREEZE_MINUTES: u32 = 60 * 12;
 const MAX_EVENTS: usize = 200;
+/// More blocks than anyone needs; keeps the state file bounded.
+const MAX_BLOCKS: usize = 500;
 /// How long an unlock lasts for a block that isn't running (protected only).
 const UNLOCK_GRACE: f64 = 15.0 * 60.0;
 
@@ -450,6 +452,9 @@ impl Daemon {
     }
 
     fn create(&mut self, config: BlockConfig, password: Option<String>, now: f64) -> R<String> {
+        if self.p.blocks.len() >= MAX_BLOCKS {
+            return Err(format!("There can be at most {MAX_BLOCKS} blocks"));
+        }
         let config = validate_config(config).map_err(|e| e.0)?;
         check_protection(&config, now)?;
         self.check_supported(&config, None)?;

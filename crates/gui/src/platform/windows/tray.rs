@@ -20,8 +20,9 @@ use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
 use windows_sys::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION,
-    NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_INFO, NIF_MESSAGE, NIF_SHOWTIP, NIF_TIP, NIIF_INFO, NIIF_RESPECT_QUIET_TIME,
+    NIM_ADD, NIM_DELETE, NIM_MODIFY, NIM_SETVERSION, NIN_SELECT, NINF_KEY, NOTIFYICON_VERSION_4,
+    NOTIFYICONDATAW, Shell_NotifyIconW,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreateIconIndirect, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyIcon,
@@ -49,6 +50,13 @@ static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
 
 thread_local! {
     static TRAY: RefCell<Weak<Tray>> = const { RefCell::new(Weak::new()) };
+}
+
+/// Show a notification from the tray icon (GLib has no notifications on
+/// Windows). Returns false when there is no icon to show it from.
+pub fn notify(title: &str, body: &str) -> bool {
+    TRAY.with(|t| t.borrow().upgrade())
+        .is_some_and(|t| t.show_notification(title, body))
 }
 
 pub struct Tray {
@@ -171,6 +179,23 @@ impl Tray {
         let tip: Vec<u16> = tip.encode_utf16().take(data.szTip.len() - 1).collect();
         data.szTip[..tip.len()].copy_from_slice(&tip);
         data
+    }
+
+    fn show_notification(&self, title: &str, body: &str) -> bool {
+        if !self.added.get() {
+            return false;
+        }
+        let mut data = self.data();
+        data.uFlags |= NIF_INFO;
+        data.dwInfoFlags = NIIF_INFO | NIIF_RESPECT_QUIET_TIME;
+        let copy = |dst: &mut [u16], s: &str| {
+            let s: Vec<u16> = s.encode_utf16().take(dst.len() - 1).collect();
+            dst[..s.len()].copy_from_slice(&s);
+        };
+        copy(&mut data.szInfoTitle, title);
+        copy(&mut data.szInfo, if body.is_empty() { " " } else { body });
+        // SAFETY: a fully initialised NOTIFYICONDATAW.
+        unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) != 0 }
     }
 
     fn notify(&self, message: u32) -> bool {

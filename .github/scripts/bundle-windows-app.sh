@@ -10,6 +10,16 @@ out=$1
 prefix=${MINGW_PREFIX:?run this in an MSYS2 shell}
 mkdir -p "$out"
 cp "${CARGO_TARGET_DIR:-target}/release/deepwork.exe" windows/deepwork.ico "$out/"
+# The app's debug information goes next to the bundle (DIR-symbols), out of
+# the package.
+objcopy=$(command -v llvm-objcopy || command -v objcopy)
+strip=$(command -v llvm-strip || command -v strip)
+mkdir -p "$out-symbols"
+"$objcopy" --only-keep-debug "$out/deepwork.exe" "$out-symbols/deepwork.exe.debug"
+"$strip" --strip-debug "$out/deepwork.exe"
+(cd "$out-symbols" && "$objcopy" --add-gnu-debuglink=deepwork.exe.debug "../$out/deepwork.exe") ||
+    echo "no debug link"
+
 
 # The SVG loader (icons are SVG) and a template of its loader list; the app
 # fills in the absolute path at start-up.

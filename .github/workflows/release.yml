@@ -73,7 +73,9 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gtk-app-${{ matrix.arch }}
-          path: app-bundle
+          path: |
+            app-bundle
+            app-bundle-symbols
 
   # The service and deepworkctl for each architecture, plus the app.
   windows:
@@ -95,7 +97,6 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gtk-app-${{ matrix.arch }}
-          path: app-bundle
       - name: Build the installer
         shell: pwsh
         run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/${{ matrix.target }}/release -App app-bundle -Out dist
@@ -158,7 +159,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       # The packages (not the app bundles they were made from).
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -170,11 +174,34 @@ jobs:
           path: dist
           pattern: windows-*
           merge-multiple: true
+      - name: Release notes
+        run: |
+          # This version's section of CHANGELOG.md, then where to read more.
+          v=${GITHUB_REF_NAME#v}
+          awk -v v="$v" '/^## \[/ { on = index($0, "[" v "]") > 0; next } on && !/^\[[^]]*\]: /' CHANGELOG.md > notes.md
+          cat >> notes.md <<'EOF'
+
+          **Downloads:** Windows: `*-windows-x64-setup.exe` or `*-windows-arm64-setup.exe` (ARM PCs).
+          Linux: `.deb` (Debian, Ubuntu), `.rpm` (Fedora) or the `.tar.gz` with `install.sh`.
+          The `-symbols`/`-debug` files are only needed to read crash reports. Check downloads
+          against `SHA256SUMS`. Supported systems and known limitations:
+          [docs/PLATFORMS.md](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md).
+          EOF
+          sed -i 's/^          //' notes.md
+          cat notes.md
       - name: Checksums
         run: cd dist && sha256sum * > SHA256SUMS
+      # Signed build provenance (Sigstore), checkable with `gh attestation
+      # verify`. Free for public repositories only.
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: dist/*
       - name: Create a draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
-            --draft --title "DeepWork ${GITHUB_REF_NAME#v}" --generate-notes
+          # Tags like v0.2.0-rc.1 are release candidates.
+          pre=$([[ "$GITHUB_REF_NAME" == *-* ]] && echo --prerelease || true)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" $pre \
+            --draft --title "DeepWork ${GITHUB_REF_NAME#v}" --notes-file notes.md --generate-notes

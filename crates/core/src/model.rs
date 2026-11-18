@@ -6,7 +6,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{Datelike, Local, TimeZone, Timelike};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -249,6 +248,7 @@ pub fn settings_weakening(old: &Settings, new: &Settings) -> Vec<&'static str> {
 
 /// Upper limit for a block's own websites (imports can be large).
 pub const MAX_WEBSITES: usize = 20_000;
+pub const MAX_APPS: usize = 2_000;
 
 pub const COLORS: &[&str] = &[
     "blue", "teal", "green", "yellow", "orange", "red", "pink", "purple",
@@ -415,6 +415,12 @@ pub fn validate_config(mut c: BlockConfig) -> Result<BlockConfig, ValidationErro
             c.websites.len()
         ));
     }
+    if c.apps.len() > MAX_APPS {
+        return invalid(format!(
+            "A block can hold at most {MAX_APPS} apps (this one has {})",
+            c.apps.len()
+        ));
+    }
     let mut seen = BTreeSet::new();
     for id in &c.lists {
         if crate::lists::get(id).is_none() {
@@ -498,23 +504,24 @@ pub fn weakening_reasons(
 
 // --------------------------------------------------------------------------- time
 
+/// A Unix timestamp in the system's time zone.
+pub fn local_time(ts: f64) -> Option<jiff::ZonedDateTime> {
+    let t = jiff::Timestamp::from_second(ts.floor() as i64).ok()?;
+    Some(t.to_zoned_datetime(jiff::tz::TimeZone::system()))
+}
+
 pub fn minute_of_week(ts: f64) -> f64 {
-    let d = Local
-        .timestamp_opt(ts.floor() as i64, 0)
-        .single()
-        .unwrap_or_else(Local::now);
-    d.weekday().num_days_from_monday() as f64 * 1440.0
+    let d = local_time(ts).unwrap_or_else(jiff::ZonedDateTime::now);
+    d.weekday().to_monday_zero_offset() as f64 * 1440.0
         + d.hour() as f64 * 60.0
         + d.minute() as f64
         + (d.second() as f64 + ts.fract()) / 60.0
 }
 
 pub fn today_key(ts: f64) -> String {
-    Local
-        .timestamp_opt(ts.floor() as i64, 0)
-        .single()
-        .unwrap_or_else(Local::now)
-        .format("%Y-%m-%d")
+    local_time(ts)
+        .unwrap_or_else(jiff::ZonedDateTime::now)
+        .strftime("%Y-%m-%d")
         .to_string()
 }
 
@@ -738,15 +745,15 @@ impl Block {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
 
     /// Local timestamp for a given date and time.
     fn ts(y: i32, m: u32, d: u32, h: u32, min: u32) -> f64 {
-        let nd = NaiveDate::from_ymd_opt(y, m, d)
+        jiff::civil::date(y as i16, m as i8, d as i8)
+            .at(h as i8, min as i8, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::system())
             .unwrap()
-            .and_hms_opt(h, min, 0)
-            .unwrap();
-        Local.from_local_datetime(&nd).single().unwrap().timestamp() as f64
+            .timestamp()
+            .as_second() as f64
     }
 
     // 2026-11-16 is a Monday.
@@ -754,6 +761,72 @@ mod tests {
 
     fn block(cfg: BlockConfig) -> Block {
         Block::new(validate_config(cfg).unwrap())
+    }
+
+    /// Whatever is accepted as a website or app can't break out of the
+    /// hosts file, a policy file or the registry.
+    #[test]
+    fn accepted_rules_are_safe() {
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let pieces = [
+            "a",
+            "Z",
+            "0",
+            "-",
+            ".",
+            "*.",
+            "www.",
+            "https://",
+            "/",
+            "?",
+            "#",
+            "@",
+            ":",
+            " ",
+            "\n",
+            "\r",
+            "\t",
+            "\0",
+            "\"",
+            "'",
+            "\\",
+            "<",
+            "&",
+            "%",
+            "ü",
+            "é",
+            "例",
+            "😀",
+            "com",
+            "x--",
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        ];
+        for _ in 0..20_000 {
+            let n = next() % 12;
+            let raw: String = (0..n)
+                .map(|_| pieces[(next() % pieces.len() as u64) as usize])
+                .collect();
+            if let Ok(d) = normalize_domain(&raw) {
+                assert!(
+                    d.chars().all(|c| c.is_ascii_lowercase()
+                        || c.is_ascii_digit()
+                        || c == '.'
+                        || c == '-'),
+                    "{raw:?} -> {d:?}"
+                );
+            }
+            if let Ok(a) = normalize_app(&raw) {
+                assert!(!a.contains('\n') && !a.contains('\0'), "{raw:?} -> {a:?}");
+            }
+        }
     }
 
     #[test]

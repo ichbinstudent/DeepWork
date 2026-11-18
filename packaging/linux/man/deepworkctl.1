@@ -1,0 +1,43 @@
+.TH DEEPWORKCTL 1 "" "DeepWork" "User Commands"
+.SH NAME
+deepworkctl \- control DeepWork from the command line
+.SH SYNOPSIS
+.B deepworkctl
+.I command
+[\fIarguments\fR]
+.SH COMMANDS
+.TP
+.B status
+Show the blocks and what's running.
+.TP
+.BI start " block minutes"
+Start a block.
+.TP
+.BI stop " block"
+Stop a block, if it isn't locked.
+.TP
+.BI unlock " block"
+Unlock a block with a random-text lock (type the text shown).
+.TP
+.BI freeze " minutes"
+Lock the whole computer.
+.TP
+.B locked
+Exit with status 0 if a block is locked or a freeze is running.
+.TP
+.B lists
+Show the built-in filter lists.
+.TP
+.BI add " name " "[\-\-lock none|random|strict] site|list:ID ..."
+Create a block, e.g. \fBdeepworkctl add Social list:social reddit.com\fR.
+.TP
+.BI delete " block"
+Delete a block, if it isn't locked.
+.TP
+.B \-\-version
+Print the version.
+.PP
+A \fIblock\fR is a block's name or id.
+.SH SEE ALSO
+.BR deepwork (1),
+.BR deepwork-daemon (8)

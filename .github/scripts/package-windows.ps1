@@ -73,4 +73,13 @@ New-Item -ItemType Directory -Force $Out | Out-Null
 $outDir = (Resolve-Path $Out).Path
 & $iscc /Q "/DVersion=$version" "/DArch=$Arch" "/DSource=$stage" "/DOutput=$outDir" windows\deepwork.iss
 if ($LASTEXITCODE -ne 0) { throw "ISCC failed ($LASTEXITCODE)" }
+
+# Debug information, published next to the installer: PDBs of the service
+# and command line, and the app's DWARF file.
+$symbols = Join-Path $env:RUNNER_TEMP "deepwork-$version-windows-$Arch-symbols"
+Remove-Item -Recurse -Force $symbols -ErrorAction SilentlyContinue
+New-Item -ItemType Directory $symbols | Out-Null
+Get-ChildItem "$Bin/*.pdb" -ErrorAction SilentlyContinue | Copy-Item -Destination $symbols
+if (Test-Path "$App-symbols") { Copy-Item "$App-symbols/*" $symbols }
+Compress-Archive -Path "$symbols/*" -DestinationPath (Join-Path $outDir "deepwork-$version-windows-$Arch-symbols.zip") -Force
 Get-ChildItem $outDir

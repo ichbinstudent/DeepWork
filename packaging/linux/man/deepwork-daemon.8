@@ -1,0 +1,38 @@
+.TH DEEPWORK-DAEMON 8 "" "DeepWork" "System Administration"
+.SH NAME
+deepwork-daemon \- the DeepWork service
+.SH SYNOPSIS
+.B deepwork-daemon
+[\fIoptions\fR]
+.SH DESCRIPTION
+Enforces DeepWork's blocks with administrator rights: the hosts file, browser policies, closing
+blocked apps, the network protections and locks. It runs as the \fBdeepwork\fR systemd service;
+the app and \fBdeepworkctl\fR talk to it over /run/deepwork/deepwork.sock.
+.SH OPTIONS
+.TP
+.BI \-\-allow\-user " uid"
+Let a user control DeepWork (added to /etc/deepwork/config.json), then exit. Restart the service
+to apply.
+.TP
+.B \-\-cleanup
+Remove DeepWork's entries from the hosts file, the browser policies and the firewall, and give
+administrator rights back after hardcore mode, then exit.
+.TP
+.BI \-\-sandbox " dir"
+Keep all files under \fIdir\fR and don't touch the system (for testing).
+.TP
+.BI \-\-socket " path"
+Listen on \fIpath\fR instead of the default socket.
+.TP
+.B \-\-version
+Print the version.
+.SH FILES
+.TP
+/var/lib/deepwork/state.json
+Blocks, locks, statistics and settings.
+.TP
+/etc/deepwork/config.json
+Who may control DeepWork (\fBallowed_users\fR).
+.SH SEE ALSO
+.BR deepwork (1),
+.BR deepworkctl (1)

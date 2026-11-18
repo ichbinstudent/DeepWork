@@ -162,6 +162,63 @@ mod tests {
         ));
     }
 
+    /// Garbage and mangled requests get answers, never a crash, and the
+    /// service keeps working.
+    #[test]
+    fn survives_garbage_and_mangled_requests() {
+        use deepwork_core::protocol::Capabilities;
+        let daemon = Arc::new(Mutex::new(Daemon::new(
+            crate::state::Persisted::default(),
+            String::new(),
+            Capabilities::all("test"),
+        )));
+        let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        let samples = [
+            r#"{"cmd":"create_block","config":{"name":"x","websites":["a.com"],"lock":"strict"},"password":null}"#,
+            r#"{"cmd":"update_block","id":"x","config":{"name":"y","apps":["firefox"]},"password":"p"}"#,
+            r#"{"cmd":"start_block","id":"x","minutes":5}"#,
+            r#"{"cmd":"unlock","id":"x","response":"abc"}"#,
+            r#"{"cmd":"take_break","id":"x","minutes":4294967295}"#,
+            r#"{"cmd":"set_settings","settings":{}}"#,
+            r#"{"cmd":"freeze","minutes":1}"#,
+            r#"{"cmd":"events","since":0}"#,
+            r#"{"cmd":"stats","days":4000000000}"#,
+        ];
+        let junk = b"{}[]\":,0123456789-.eE ntrufalsxyz\\\x00\xff\n";
+        for i in 0..3_000 {
+            let mut req: Vec<u8> = if i % 3 == 0 {
+                (0..next() % 120).map(|_| (next() % 256) as u8).collect()
+            } else {
+                let mut r = samples[(next() % samples.len() as u64) as usize]
+                    .as_bytes()
+                    .to_vec();
+                for _ in 0..1 + next() % 4 {
+                    let at = (next() % r.len() as u64) as usize;
+                    r[at] = junk[(next() % junk.len() as u64) as usize];
+                }
+                r
+            };
+            req.push(b'\n');
+            let mut out = Vec::new();
+            handle_conn(&req[..], &mut out, daemon.clone(), true);
+        }
+        // Real requests with silly values are answered too.
+        for s in samples {
+            let mut out = Vec::new();
+            handle_conn(format!("{s}\n").as_bytes(), &mut out, daemon.clone(), true);
+            assert!(!out.is_empty(), "{s}");
+        }
+        let mut out = Vec::new();
+        handle_conn(&b"{\"cmd\":\"status\"}\n"[..], &mut out, daemon, true);
+        assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"));
+    }
+
     #[test]
     fn refuses_strangers_and_huge_requests() {
         use deepwork_core::protocol::Capabilities;

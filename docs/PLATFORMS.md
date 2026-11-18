@@ -80,3 +80,6 @@ DeepWork follows [Semantic Versioning](https://semver.org).
 - **Downgrades** aren't supported: the Windows installer refuses them, and on Linux an older
   service refuses data written by a newer one.
 - Running locks stay locked through an update.
+- DeepWork doesn't check for updates itself. New versions are published as
+  [GitHub releases](https://github.com/ichbinstudent/deepwork/releases); follow them with
+  *Watch → Custom → Releases*, or the releases feed.

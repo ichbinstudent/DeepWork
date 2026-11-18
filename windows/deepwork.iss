@@ -64,14 +64,18 @@ RestartApplications=no
 Source: "{#Source}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\DeepWork"; Filename: "{app}\deepwork.exe"; IconFilename: "{app}\deepwork.ico"; Comment: "Block distracting websites and apps"
+Name: "{autoprograms}\DeepWork"; Filename: "{app}\deepwork.exe"; IconFilename: "{app}\deepwork.ico"; Comment: "Block distracting websites and apps"; AppUserModelID: "io.github.ichbinstudent.DeepWork"
 ; The tray icon at every sign-in.
-Name: "{commonstartup}\DeepWork"; Filename: "{app}\deepwork.exe"; Parameters: "--background"; IconFilename: "{app}\deepwork.ico"
+Name: "{commonstartup}\DeepWork"; Filename: "{app}\deepwork.exe"; Parameters: "--background"; IconFilename: "{app}\deepwork.ico"; AppUserModelID: "io.github.ichbinstudent.DeepWork"
 
 [Run]
 Filename: "{app}\deepwork.exe"; Description: "Open DeepWork"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
+var
+  { Set once the new version is installed and its service started. }
+  Finished: Boolean;
+
 const
   ServiceName = 'DeepWork';
   EnvKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
@@ -247,8 +251,21 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then
+  if CurStep = ssPostInstall then begin
     StartService;
+    Finished := True;
+  end;
+end;
+
+{ If installing failed or was cancelled after the old service was stopped,
+  Setup has put the old files back; start the old service again. }
+procedure DeinitializeSetup;
+begin
+  if not Finished and ServiceExists then begin
+    Log('setup did not finish; starting the previous service again');
+    Sys('sc.exe', 'failure ' + ServiceName + ' reset= 86400 actions= restart/1000/restart/5000/restart/10000');
+    Sys('sc.exe', 'start ' + ServiceName);
+  end;
 end;
 
 function InitializeUninstall: Boolean;

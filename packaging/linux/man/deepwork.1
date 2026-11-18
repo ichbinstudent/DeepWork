@@ -1,0 +1,22 @@
+.TH DEEPWORK 1 "" "DeepWork" "User Commands"
+.SH NAME
+deepwork \- block distracting websites and apps
+.SH SYNOPSIS
+.B deepwork
+[\fB\-\-background\fR] [\fB\-\-version\fR]
+.SH DESCRIPTION
+The DeepWork app: create blocks of websites and apps, start them or give them a schedule, and
+lock them. Blocks are enforced by the \fBdeepwork-daemon\fR service, so closing the app doesn't
+end them.
+.SH OPTIONS
+.TP
+.B \-\-background
+Start without a window, with only the top-bar indicator and notifications (used at login).
+.TP
+.B \-\-version
+Print the version.
+.SH SEE ALSO
+.BR deepworkctl (1),
+.BR deepwork-daemon (8)
+.PP
+https://github.com/ichbinstudent/deepwork

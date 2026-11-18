@@ -42,6 +42,10 @@ fn load_style() {
 }
 
 fn send(app: &adw::Application, id: &str, title: &str, body: &str) {
+    #[cfg(windows)]
+    if crate::platform::tray::notify(title, body) {
+        return;
+    }
     let n = gio::Notification::new(title);
     n.set_body(Some(body));
     n.set_icon(&gio::ThemedIcon::new(APP_ID));
@@ -159,6 +163,8 @@ fn main() -> glib::ExitCode {
         return glib::ExitCode::SUCCESS;
     }
     let background = std::env::args().any(|a| a == "--background");
+    #[cfg(windows)]
+    platform::windows::set_app_id();
     // One copy per user: a second one shows the first one's window instead.
     #[cfg(windows)]
     if std::env::var_os("DEEPWORK_DEBUG_SHOT").is_none()

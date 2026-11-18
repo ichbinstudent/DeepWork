@@ -6,7 +6,7 @@ set -e
 # sudo, pkexec or run0. Others: deepwork-daemon --allow-user <uid>.
 user="${SUDO_UID:-${PKEXEC_UID:-}}"
 if [ -n "$user" ] && [ "$user" != 0 ]; then
-    /usr/bin/deepwork-daemon --allow-user "$user" >/dev/null || true
+    deepwork-daemon --allow-user "$user" >/dev/null || true
 fi
 
 if [ -d /run/systemd/system ]; then

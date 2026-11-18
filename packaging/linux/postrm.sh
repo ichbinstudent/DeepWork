@@ -2,6 +2,7 @@
 # After removing DeepWork (deb: postrm, rpm: %postun). `apt purge` also
 # deletes blocks, statistics and settings; with rpm they stay in
 # /var/lib/deepwork and /etc/deepwork.
+set -e
 if [ "$1" = purge ]; then
     rm -rf /var/lib/deepwork /etc/deepwork
 fi
