@@ -204,6 +204,8 @@ service. Locks only stop standard users: an administrator can always stop the se
 Uninstall from *Settings → Apps*. It asks whether to delete your data too, and is refused while a
 block is locked or a freeze is running.
 
+<p align="center"><img src="docs/screenshots/windows-focus.png" width="60%" alt="DeepWork on Windows 11 with a running block"></p>
+
 For scripted installs: `setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART [/USER=<SID>]
 [/LOG=<file>]` (`/USER` picks who may control DeepWork, by default whoever started the installer),
 and `"C:\Program Files\DeepWork\unins000.exe" /VERYSILENT /SUPPRESSMSGBOXES [/PURGE=1]`.
