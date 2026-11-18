@@ -6,6 +6,7 @@
 #   usage (in an MSYS2 shell, after cargo build --release -p deepwork):
 #   bundle-windows-app.sh DIR
 set -euxo pipefail
+lap() { echo "[bundle] $1 after ${SECONDS}s"; }
 out=$1
 prefix=${MINGW_PREFIX:?run this in an MSYS2 shell}
 mkdir -p "$out"
@@ -56,6 +57,7 @@ while ((${#queue[@]})); do
     done
 done
 echo "DLLs: $(ls "$out"/*.dll | wc -l)"
+lap "DLLs"
 set -x
 
 # Icons: Adwaita for the interface, hicolor for the app's own icon.
@@ -82,32 +84,40 @@ mkdir -p "$notices"
     echo "https://github.com/ichbinstudent/deepwork/issues"
     echo
 } >"$notices/PACKAGES.txt"
+# One pacman call each (pacman is slow, especially emulated on ARM).
+owned=()
+for f in "$out"/*.dll; do
+    [ -e "$prefix/bin/$(basename "$f")" ] && owned+=("$prefix/bin/$(basename "$f")")
+done
+for f in "$out/$loaders/loaders/"*.dll; do
+    owned+=("$prefix/$loaders/loaders/$(basename "$f")")
+done
 pkgs=$(
     {
-        for f in "$out"/*.dll "$out/$loaders/loaders/"*.dll; do
-            pacman -Qqo "$prefix/bin/$(basename "$f")" 2>/dev/null ||
-                pacman -Qqo "$prefix/$loaders/loaders/$(basename "$f")" 2>/dev/null || true
-        done
+        pacman -Qqo "${owned[@]}" 2>/dev/null || true
         echo "${MINGW_PACKAGE_PREFIX}-adwaita-icon-theme"
         echo "${MINGW_PACKAGE_PREFIX}-hicolor-icon-theme"
     } | sort -u
 )
+# shellcheck disable=SC2086 # one word per package
+pacman -Qi $pkgs 2>/dev/null | awk '
+    /^Name / { name = $3 }
+    /^Version / { print name " " $3 }
+    /^(URL|Licenses) / { print "    " $0 }
+' >>"$notices/PACKAGES.txt"
 for pkg in $pkgs; do
-    pacman -Q "$pkg" >/dev/null 2>&1 || continue
     name=${pkg#"${MINGW_PACKAGE_PREFIX}-"}
-    {
-        pacman -Q "$pkg"
-        pacman -Qi "$pkg" | grep -E '^(URL|Licenses) ' | sed 's/^/    /'
-    } >>"$notices/PACKAGES.txt"
     if [ -d "$prefix/share/licenses/$name" ]; then
         cp -r "$prefix/share/licenses/$name" "$notices/$name"
     fi
 done
 echo "Notices for $(echo "$pkgs" | wc -l) MSYS2 packages"
+lap "notices"
 set -x
 
 # GSettings schemas used by GTK (file and colour choosers).
 mkdir -p "$out/share/glib-2.0/schemas"
 cp "$prefix/share/glib-2.0/schemas/gschemas.compiled" "$out/share/glib-2.0/schemas/"
 
+lap "icons and schemas"
 echo "Bundled into $out: $(find "$out" -type f | wc -l) files, $(du -sh "$out" | cut -f1)"

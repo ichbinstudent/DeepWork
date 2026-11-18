@@ -208,7 +208,16 @@ Check (ServiceUp) 'the service still runs'
 
 # Forget the locked block (the test can't wait for it), then uninstall.
 sc.exe failure DeepWork reset= 0 actions= '""' | Out-Null
-Stop-Service DeepWork
+function Stop-DeepWork {
+    for ($i = 0; $i -lt 40; $i++) {
+        if ((Get-Service DeepWork).Status -eq 'Stopped') { return $true }
+        sc.exe stop DeepWork | Out-Null
+        Start-Sleep -Milliseconds 500
+    }
+    sc.exe queryex DeepWork | Write-Host
+    $false
+}
+Check (Stop-DeepWork) 'the service stops'
 Remove-Item "$data\state\state.json"
 Start-Service DeepWork
 Check (ServiceUp) 'the service runs without the lock'
