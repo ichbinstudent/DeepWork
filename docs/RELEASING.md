@@ -14,7 +14,9 @@ Pushing a tag `vX.Y.Z` runs `.github/workflows/release.yml`:
    each installer on a Windows runner of its architecture (install, block, update with a locked
    block, refused uninstall, uninstall).
 5. Writes `SHA256SUMS`, signed build provenance (once the repository is public), and a **draft**
-   release with this version's section of `CHANGELOG.md`.
+   release with this version's section of `CHANGELOG.md`. The debug symbols (for reading crash
+   reports) aren't published: they stay with the workflow run as the `debug-symbols-vX.Y.Z`
+   artifact for 90 days; download and keep them if needed longer.
 
 Running the workflow by hand (*Actions → Release → Run workflow*) builds and tests everything
 without publishing. Tags with a hyphen (`v0.2.0-rc.1`) become pre-releases; set the same version

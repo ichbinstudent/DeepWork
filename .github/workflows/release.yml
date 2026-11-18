@@ -189,6 +189,15 @@ jobs:
           path: dist
           pattern: windows-*
           merge-multiple: true
+      # Debug symbols are for reading crash reports, not for users: they stay
+      # with this workflow run instead of the release.
+      - name: Set the debug symbols aside
+        run: mkdir symbols && mv dist/*-symbols.zip dist/*-debug.tar.gz symbols/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: debug-symbols-${{ github.ref_name }}
+          path: symbols
+          retention-days: 90
       - name: Release notes
         run: |
           # This version's section of CHANGELOG.md, then where to read more.
@@ -198,8 +207,7 @@ jobs:
 
           **Downloads:** Windows: `*-windows-x64-setup.exe` or `*-windows-arm64-setup.exe` (ARM PCs).
           Linux: `.deb` (Debian, Ubuntu), `.rpm` (Fedora) or the `.tar.gz` with `install.sh`.
-          The `-symbols`/`-debug` files are only needed to read crash reports. Check downloads
-          against `SHA256SUMS`. Supported systems and known limitations:
+          Check downloads against `SHA256SUMS`. Supported systems and known limitations:
           [docs/PLATFORMS.md](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md).
           EOF
           sed -i 's/^          //' notes.md
