@@ -27,7 +27,16 @@ pub struct Enforcer {
     last_hosts_check: Instant,
     last_lock: Option<Instant>,
     hardcore_until: f64,
+    /// Addresses of newly blocked sites whose connections are being cut,
+    /// since when, and how many of [`CUT_AT`] are done.
+    cutting: Option<(BTreeSet<IpAddr>, Instant, usize)>,
 }
+
+/// When open connections to newly blocked sites are cut (seconds after the
+/// block started). A page that reconnects right away may still reach the
+/// site while DNS caches catch up with the hosts file, so it is repeated a
+/// few times. Not more often: the addresses can be shared with other sites.
+const CUT_AT: [u64; 6] = [0, 2, 5, 15, 30, 60];
 
 impl Enforcer {
     pub fn new(mut platform: Platform, opts: &Options) -> Self {
@@ -48,6 +57,7 @@ impl Enforcer {
             last_hosts_check: Instant::now(),
             last_lock: None,
             hardcore_until: 0.0,
+            cutting: None,
         }
     }
 
@@ -96,8 +106,18 @@ impl Enforcer {
                 {
                     eprintln!("deepwork: cannot update browser policies: {e}");
                 }
+                // Stop cutting once a site is unblocked again.
+                if self
+                    .last_domains
+                    .as_ref()
+                    .is_some_and(|old| !old.is_subset(&plan.domains))
+                {
+                    self.cutting = None;
+                }
                 if !ips.is_empty() {
-                    self.platform.system.cut_connections(&ips);
+                    let mut set = self.cutting.take().map(|c| c.0).unwrap_or_default();
+                    set.extend(ips);
+                    self.cutting = Some((set, Instant::now(), 0));
                 }
                 self.last_domains = Some(plan.domains.clone());
                 self.last_doh = plan.block_doh;
@@ -106,6 +126,16 @@ impl Enforcer {
                     set.extend(exact.iter().cloned());
                     net.set_blocked(set);
                 }
+            }
+        }
+        if let Some((ips, since, done)) = &mut self.cutting
+            && since.elapsed() >= Duration::from_secs(CUT_AT[*done])
+        {
+            let ips: Vec<IpAddr> = ips.iter().copied().collect();
+            self.platform.system.cut_connections(&ips);
+            *done += 1;
+            if *done == CUT_AT.len() {
+                self.cutting = None;
             }
         }
         if let Some(net) = self.platform.net.as_mut() {

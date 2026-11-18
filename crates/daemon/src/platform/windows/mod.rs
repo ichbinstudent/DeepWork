@@ -1,11 +1,12 @@
 //! Windows (experimental): website blocking through the hosts file and
 //! browser policies (Chrome, Edge, Brave and Chromium in the registry,
-//! Firefox's `policies.json`), and the named pipe the app and `deepworkctl` talk to. The
-//! service runs as SYSTEM from a scheduled task (see `windows/install.ps1`).
+//! Firefox's `policies.json`), closing open connections to blocked sites,
+//! and the named pipe the app and `deepworkctl` talk to. The service runs as
+//! SYSTEM from a scheduled task (see `windows/install.ps1`).
 //!
 //! Still to do, roughly in order:
 //! - running as a real Windows service (the `windows-service` crate).
-//! - the GTK app (builds with MSYS2), with a tray icon.
+//! - a tray icon for the app.
 //! - apps ([`ProcessTable`](super::ProcessTable)): Toolhelp32 snapshots,
 //!   `QueryFullProcessImageNameW`, `TerminateProcess`; Store apps by
 //!   package family name.
@@ -25,6 +26,7 @@ use crate::browser::{Layout, PolicyStore};
 
 mod chromium;
 mod pipe;
+mod tcp;
 pub use pipe::serve;
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -97,6 +99,12 @@ impl System for WindowsSystem {
     fn flush_dns(&self) {
         if self.run {
             spawn_quiet("ipconfig", &["/flushdns"]);
+        }
+    }
+
+    fn cut_connections(&self, ips: &[std::net::IpAddr]) {
+        if self.run {
+            tcp::cut(ips);
         }
     }
 }

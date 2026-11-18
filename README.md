@@ -229,14 +229,15 @@ the lock menu).
 
 | Feature | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Website blocking (hosts file) | ✅ | ✅ (untested) | ✅ (untested) |
+| Website blocking (hosts file) | ✅ | ✅ (untested) | ✅ |
+| Cutting off sites that are already open | ✅ | — | ✅ |
 | Browser policies | ✅ | Firefox only (untested) | ✅ registry + Firefox |
 | App blocking | ✅ | — | — |
 | Encrypted DNS / HTTPS filter / VPN blocking | ✅ | — | — |
 | Freeze | ✅ | — | — |
 | *Until restart* lock | ✅ | ✅ (untested) | — |
 | Hardcore lock | ✅ | — | — |
-| Service ↔ app connection | Unix socket | Unix socket | named pipe (untested) |
+| Service ↔ app connection | Unix socket | Unix socket | named pipe |
 | App | ✅ | — | ✅ (no tray icon yet) |
 | Tray icon, running-app picker | ✅ | — | — |
 
