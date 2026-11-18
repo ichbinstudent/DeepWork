@@ -111,7 +111,15 @@ if ($App) {
         Check (Test-Path $env:DEEPWORK_DEBUG_SHOT) "screenshot of $page"
         # Only where the runner has a taskbar (Explorer) to show it in.
         if (Get-Process explorer -ErrorAction SilentlyContinue) {
-            Check ((Get-Content $log -Raw) -match 'tray icon added') "tray icon ($page)"
+            $added = (Get-Content $log -Raw) -match 'tray icon added'
+            if (-not $added) {
+                Add-Type -Namespace W -Name U -MemberDefinition '[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string c, string n);'
+                Write-Host ("taskbar window: {0}" -f [W.U]::FindWindow('Shell_TrayWnd', $null))
+                Get-Process explorer | Format-Table Id, SessionId, StartTime | Out-String | Write-Host
+                Write-Host "this session: $([Diagnostics.Process]::GetCurrentProcess().SessionId)"
+                Save-Screen (Join-Path $shots "desktop-tray-$page.png")
+            }
+            Check $added "tray icon ($page)"
         } else {
             Write-Host "no taskbar on this runner: tray icon not checked"
         }
