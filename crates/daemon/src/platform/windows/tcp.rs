@@ -243,7 +243,8 @@ mod tests {
             .unwrap();
 
         let (closed, error) = cut_where(|remote| remote == server);
-        if error == Some(ERROR_ACCESS_DENIED) {
+        // CI runs as administrator; elsewhere this may not be possible.
+        if error == Some(ERROR_ACCESS_DENIED) && std::env::var_os("CI").is_none() {
             eprintln!("skipped: closing connections needs administrator rights");
             return;
         }

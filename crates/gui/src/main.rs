@@ -48,8 +48,8 @@ fn send(app: &adw::Application, id: &str, title: &str, body: &str) {
     app.send_notification(Some(id), &n);
 }
 
-fn notify(app: &adw::Application, store: &Store) {
-    for ev in store.new_events() {
+fn notify(app: &adw::Application, events: Vec<deepwork_core::protocol::Event>) {
+    for ev in events {
         if matches!(
             ev.kind.as_str(),
             "app_blocked" | "block_started" | "block_ended" | "frozen" | "thawed" | "clock"
@@ -197,7 +197,6 @@ fn main() -> glib::ExitCode {
             let store = app.store.clone();
             store.refresh();
             store.refresh_stats();
-            let _ = store.new_events();
 
             // Top-bar indicator.
             if let Some(conn) = gapp.dbus_connection() {
@@ -227,25 +226,11 @@ fn main() -> glib::ExitCode {
                 }
             }
 
-            let s = store.clone();
-            glib::timeout_add_seconds_local(1, move || {
-                s.refresh();
-                glib::ControlFlow::Continue
-            });
-            let s = store.clone();
             let weak_app = gapp.downgrade();
-            glib::timeout_add_seconds_local(2, move || {
-                if let Some(gapp) = weak_app.upgrade()
-                    && s.online()
-                {
-                    notify(&gapp, &s);
+            store.poll_in_background(move |events| {
+                if let Some(gapp) = weak_app.upgrade() {
+                    notify(&gapp, events);
                 }
-                glib::ControlFlow::Continue
-            });
-            let s = store.clone();
-            glib::timeout_add_seconds_local(30, move || {
-                s.refresh_stats();
-                glib::ControlFlow::Continue
             });
         });
     }

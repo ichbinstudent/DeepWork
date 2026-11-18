@@ -71,6 +71,21 @@ Check ((Get-Acl $data).Owner -match 'Administrators|S-1-5-32-544') 'data folder 
 Check ((Get-Content "$data\deepwork.log" -Raw) -match 'service started') 'the service writes a readable log'
 Check ((Get-Content "$data\state\state.json" -Raw) -match 'example.com') 'administrators can read the state'
 
+# How long one request over the pipe takes (the app asks every second).
+$times = foreach ($i in 1..20) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    $pipe = New-Object IO.Pipes.NamedPipeClientStream('.', 'deepwork', [IO.Pipes.PipeDirection]::InOut)
+    $pipe.Connect(5000)
+    $w = New-Object IO.StreamWriter($pipe); $w.AutoFlush = $true
+    $w.WriteLine('{"cmd":"status"}')
+    $null = (New-Object IO.StreamReader($pipe)).ReadLine()
+    $pipe.Dispose()
+    $sw.Elapsed.TotalMilliseconds
+}
+$avg = ($times | Measure-Object -Average).Average
+Write-Host ("status over the pipe: {0:N1} ms on average, {1:N1} ms at most" -f $avg, ($times | Measure-Object -Maximum).Maximum)
+Check ($avg -lt 100) 'the pipe answers quickly'
+
 if ($App) {
     $menu = Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs\DeepWork.lnk'
     Check (Test-Path $menu) 'Start menu shortcut'

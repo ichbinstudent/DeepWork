@@ -283,11 +283,23 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
             }
 
             // Hero
-            hero.remove_css_class("active");
-            hero.remove_css_class("frozen");
+            // Only touch the classes when they change: every change restyles
+            // the whole hero.
+            let frozen = s.frozen_until > now;
+            for (class, on) in [
+                ("frozen", frozen),
+                ("active", !frozen && !active.is_empty()),
+            ] {
+                if hero.has_css_class(class) != on {
+                    if on {
+                        hero.add_css_class(class);
+                    } else {
+                        hero.remove_css_class(class);
+                    }
+                }
+            }
             let enforcing: Vec<&&BlockStatus> = active.iter().filter(|b| b.enforcing).collect();
-            if s.frozen_until > now {
-                hero.add_css_class("frozen");
+            if frozen {
                 title.set_label("Frozen");
                 subtitle.set_label(&format!(
                     "Your computer stays locked until {}.",
@@ -304,7 +316,6 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
                     .unwrap_or(0.0)
                     .total_cmp(&b.window_end.unwrap_or(0.0))
             }) {
-                hero.add_css_class("active");
                 let sites: std::collections::BTreeSet<String> = enforcing
                     .iter()
                     .flat_map(|b| b.config.effective_websites())
