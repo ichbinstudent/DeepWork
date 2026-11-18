@@ -68,9 +68,11 @@ once available, update DeepWork with the rest of the system.
 
 ## Still to set up
 
-- **Code signing for Windows** (needs a certificate: Azure Trusted Signing, or an OV/EV
-  certificate): sign the three programs before they are packaged and the installer after
-  `ISCC` in `.github/scripts/package-windows.ps1`, with a timestamp.
+- **Code signing for Windows**: get an OV/EV code-signing certificate (as a `.pfx`) and add the
+  repository secrets `WINDOWS_SIGN_PFX` (the file, base64) and `WINDOWS_SIGN_PASSWORD`. The
+  release then signs the programs, the installer and the uninstaller with a timestamp
+  (`.github/scripts/package-windows.ps1`; CI tests the same path with a throwaway certificate).
+  Azure Trusted Signing would need its own step there instead.
 - **Signed Linux packages and repositories** (an APT repository key, an RPM GPG key, or COPR/OBS).
 - **winget**: a manifest in `microsoft/winget-pkgs` once the installer is signed.
 - **AUR** package.
