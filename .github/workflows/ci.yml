@@ -49,8 +49,11 @@ jobs:
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build
-        run: rustup toolchain install && cargo build --release --locked
+        run: cargo build --release --locked
       - name: Package
         env:
           PACKAGE_MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
@@ -133,6 +136,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Clippy
         run: cargo clippy -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
       - name: Test
@@ -184,10 +188,19 @@ jobs:
           cache: true
           pacboy: >-
             cc:p pkgconf:p rust:p gtk4:p libadwaita:p librsvg:p adwaita-icon-theme:p
+      # The app's dependencies take minutes to build; keep them between runs.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target-gnu
+            .cargo-gnu
+          key: app-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: app-${{ matrix.arch }}-
       - name: Build and bundle the app
         shell: msys2 {0}
         env:
           CARGO_TARGET_DIR: target-gnu
+          CARGO_HOME: ${{ github.workspace }}/.cargo-gnu
         run: |
           cargo build --release --locked -p deepwork
           .github/scripts/bundle-windows-app.sh app-bundle
@@ -202,6 +215,9 @@ jobs:
             "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
           }
           rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ${{ matrix.arch }}
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
       # Exercise the signing path with a throwaway self-signed certificate

@@ -34,8 +34,11 @@ jobs:
             exit 1
           fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - name: Build
-        run: rustup toolchain install && cargo build --release --locked
+        run: cargo build --release --locked
       - name: Package
         env:
           PACKAGE_MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
@@ -45,8 +48,9 @@ jobs:
           name: linux-x86_64
           path: dist
 
-  # The GTK app, built natively with MSYS2 for each architecture.
-  windows-app:
+  # Per architecture, natively on a runner of that kind: the GTK app (MSYS2),
+  # the service and deepworkctl, and the installer.
+  windows:
     strategy:
       matrix:
         include:
@@ -63,47 +67,48 @@ jobs:
         with:
           msystem: ${{ matrix.msystem }}
           update: true
+          cache: true
           pacboy: >-
             cc:p pkgconf:p rust:p gtk4:p libadwaita:p librsvg:p adwaita-icon-theme:p
+      # The app's dependencies take minutes to build; keep them between runs.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            target-gnu
+            .cargo-gnu
+          key: app-${{ matrix.arch }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: app-${{ matrix.arch }}-
       - name: Build and bundle the app
         shell: msys2 {0}
+        env:
+          CARGO_TARGET_DIR: target-gnu
+          CARGO_HOME: ${{ github.workspace }}/.cargo-gnu
         run: |
           cargo build --release --locked -p deepwork
           .github/scripts/bundle-windows-app.sh app-bundle
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: gtk-app-${{ matrix.arch }}
-          path: |
-            app-bundle
-            app-bundle-symbols
-
-  # The service and deepworkctl for each architecture, plus the app.
-  windows:
-    needs: windows-app
-    strategy:
-      matrix:
-        include:
-          - target: x86_64-pc-windows-msvc
-            arch: x64
-          - target: aarch64-pc-windows-msvc
-            arch: arm64
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust
-        run: rustup toolchain install && rustup target add ${{ matrix.target }}
-      - name: Build
-        run: cargo build --release --locked -p deepwork-daemon --target ${{ matrix.target }}
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
+            $arch = if ('${{ matrix.arch }}' -eq 'arm64') { 'aarch64' } else { 'x86_64' }
+            Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
+            ./rustup-init.exe -y --profile minimal --default-toolchain none
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
+            "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
+          }
+          rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          name: gtk-app-${{ matrix.arch }}
+          key: ${{ matrix.arch }}
+      - name: Build the service
+        run: cargo build --release --locked -p deepwork-daemon
       - name: Build the installer
         shell: pwsh
         env:
           # Signing happens only when these secrets are set.
           WINDOWS_SIGN_PFX: ${{ secrets.WINDOWS_SIGN_PFX }}
           WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGN_PASSWORD }}
-        run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/${{ matrix.target }}/release -App app-bundle -Out dist
+        run: ./.github/scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Bin target/release -App app-bundle -Out dist
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: windows-${{ matrix.arch }}
