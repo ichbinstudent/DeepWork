@@ -87,6 +87,10 @@ Check ((sc.exe qfailure DeepWork | Out-String) -match 'RESTART') 'service restar
 Check ((Get-ItemProperty $uninstallKey).DisplayVersion -eq $version) "Settings > Apps lists DeepWork $version"
 Check ([Environment]::GetEnvironmentVariable('Path', 'Machine') -split ';' -contains $dir) 'deepworkctl is on the PATH'
 Check ((& $ctl --version) -match [regex]::Escape($version)) 'deepworkctl --version'
+foreach ($exe in 'deepwork.exe', 'deepwork-daemon.exe', 'deepworkctl.exe') {
+    $info = (Get-Item (Join-Path $dir $exe)).VersionInfo
+    Check ($info.ProductVersion -eq $version -and $info.ProductName -eq 'DeepWork') "$exe has version information"
+}
 $me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 Check ((Get-Content "$data\config.json" -Raw) -match [regex]::Escape($me)) 'the installing user may control DeepWork (full SID)'
 Check (Test-Path (Join-Path $dir 'LICENSE')) 'license installed'

@@ -277,13 +277,29 @@ pub fn build(
         .build();
     top.add_named(&split, Some("main"));
     top.add_named(&offline_page(&store), Some("offline"));
-    toasts.set_child(Some(&top));
+    // App and service from different versions (e.g. the app was open during
+    // an update): it works, but newer features may be missing.
+    let mismatch = adw::Banner::builder().button_label("Quit").build();
+    {
+        let window = window.clone();
+        mismatch.connect_button_clicked(move |_| {
+            if let Some(app) = window.application() {
+                app.quit();
+            }
+        });
+    }
+    let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    column.append(&mismatch);
+    column.append(&top);
+    top.set_vexpand(true);
+    toasts.set_child(Some(&column));
     window.set_content(Some(&toasts));
 
     let update = {
         let store = store.clone();
         let top = top.clone();
         let list = list.clone();
+        let mismatch = mismatch.clone();
         move || {
             let online = store.online();
             top.set_visible_child_name(if online { "main" } else { "offline" });
@@ -298,6 +314,16 @@ pub fn build(
                     i += 1;
                 }
                 let s = store.status().unwrap();
+                let differs = !s.version.is_empty() && s.version != deepwork_core::VERSION;
+                if differs {
+                    mismatch.set_title(&format!(
+                        "This app is version {}, the DeepWork service {}. Quit and reopen the app \
+                         after updating.",
+                        deepwork_core::VERSION,
+                        s.version
+                    ));
+                }
+                mismatch.set_revealed(differs);
                 let now = deepwork_core::now();
                 let n = s.blocks.iter().filter(|b| b.enforcing).count();
                 service_dot.remove_css_class("offline");

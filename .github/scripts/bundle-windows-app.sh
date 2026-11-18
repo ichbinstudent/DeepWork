@@ -55,6 +55,47 @@ cp "$prefix/share/icons/hicolor/index.theme" "$out/share/icons/hicolor/"
 cp assets/icon.svg "$out/share/icons/hicolor/scalable/apps/io.github.ichbinstudent.DeepWork.svg"
 gtk4-update-icon-cache -q -t -f "$out/share/icons/Adwaita" || echo "no icon cache"
 
+# Licenses of everything bundled from MSYS2 (GTK and its libraries are
+# LGPL: list exact versions and where their source is).
+set +x
+notices="$out/third-party/msys2"
+mkdir -p "$notices"
+{
+    echo "The DeepWork app for Windows includes these packages from MSYS2"
+    echo "(https://www.msys2.org), unmodified. The libraries are used as shared"
+    echo "libraries (DLLs) and can be replaced with compatible builds."
+    echo
+    echo "Each package's source is at https://packages.msys2.org/package/<name>"
+    echo "(exact versions are kept at https://repo.msys2.org/mingw/sources/)."
+    echo "On request, the DeepWork project provides the corresponding source of"
+    echo "these versions for at least three years after a release: ask at"
+    echo "https://github.com/ichbinstudent/deepwork/issues"
+    echo
+} >"$notices/PACKAGES.txt"
+pkgs=$(
+    {
+        for f in "$out"/*.dll "$out/$loaders/loaders/"*.dll; do
+            pacman -Qqo "$prefix/bin/$(basename "$f")" 2>/dev/null ||
+                pacman -Qqo "$prefix/$loaders/loaders/$(basename "$f")" 2>/dev/null || true
+        done
+        echo "${MINGW_PACKAGE_PREFIX}-adwaita-icon-theme"
+        echo "${MINGW_PACKAGE_PREFIX}-hicolor-icon-theme"
+    } | sort -u
+)
+for pkg in $pkgs; do
+    pacman -Q "$pkg" >/dev/null 2>&1 || continue
+    name=${pkg#"${MINGW_PACKAGE_PREFIX}-"}
+    {
+        pacman -Q "$pkg"
+        pacman -Qi "$pkg" | grep -E '^(URL|Licenses) ' | sed 's/^/    /'
+    } >>"$notices/PACKAGES.txt"
+    if [ -d "$prefix/share/licenses/$name" ]; then
+        cp -r "$prefix/share/licenses/$name" "$notices/$name"
+    fi
+done
+echo "Notices for $(echo "$pkgs" | wc -l) MSYS2 packages"
+set -x
+
 # GSettings schemas used by GTK (file and colour choosers).
 mkdir -p "$out/share/glib-2.0/schemas"
 cp "$prefix/share/glib-2.0/schemas/gschemas.compiled" "$out/share/glib-2.0/schemas/"

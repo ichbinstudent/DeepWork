@@ -16,10 +16,11 @@ jobs:
     steps:
       - name: Install dependencies
         run: pacman -Syu --noconfirm --needed base-devel git gtk4 libadwaita rustup
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust
-        run: rustup default stable && rustup component add rustfmt clippy
-      - uses: actions/cache@v4
+        # The version in rust-toolchain.toml.
+        run: rustup default stable && rustup toolchain install
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -33,6 +34,69 @@ jobs:
       - name: Test
         run: cargo test --workspace --locked
 
+  # The Linux packages (tarball, .deb, .rpm), built on the oldest supported
+  # system (Debian 13), checked with lintian and the desktop validators.
+  linux-packages:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential pkg-config \
+            libgtk-4-dev libadwaita-1-dev libglib2.0-dev-bin curl ca-certificates git python3 \
+            lintian desktop-file-utils appstream
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build
+        run: rustup toolchain install && cargo build --release --locked
+      - name: Package
+        env:
+          PACKAGE_MAINTAINER: ${{ vars.PACKAGE_MAINTAINER }}
+        run: .github/scripts/package-linux.sh target/release dist
+      - name: Lint
+        run: |
+          desktop-file-validate data/*.desktop
+          appstreamcli validate --no-net data/*.metainfo.xml
+          # bogus-mail-host: until the PACKAGE_MAINTAINER variable is set.
+          lintian --fail-on error --suppress-tags bogus-mail-host,mail-address-loops-or-bounces --info dist/*.deb
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-packages
+          path: dist
+
+  # Install, use, update and remove each package on a clean system.
+  linux-package-test:
+    needs: linux-packages
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: debian:trixie
+            package: "*.deb"
+          - image: fedora:42
+            package: "*.rpm"
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-packages
+          path: dist
+      - name: Test the package
+        run: .github/scripts/linux-package-test.sh dist/${{ matrix.package }}
+
+  # Security advisories, licenses and sources of all dependencies.
+  dependencies:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: EmbarkStudios/cargo-deny-action@70f81531115945ba6eb6b941ec9d39d063438eb9 # v2
+        with:
+          command: check advisories licenses sources bans
+
   # The service and core on the other platforms (no GUI there yet).
   portable:
     strategy:
@@ -43,9 +107,9 @@ jobs:
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Install Rust
-        run: rustup update stable && rustup default stable && rustup component add clippy
+        run: rustup toolchain install
       - name: Clippy
         run: cargo clippy -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
       - name: Test
@@ -89,8 +153,8 @@ jobs:
             msystem: CLANGARM64
     runs-on: ${{ matrix.runner }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: msys2/setup-msys2@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2
         with:
           msystem: ${{ matrix.msystem }}
           update: true
@@ -110,9 +174,11 @@ jobs:
           if (-not (Get-Command rustup -ErrorAction SilentlyContinue)) {
             $arch = if ('${{ matrix.arch }}' -eq 'arm64') { 'aarch64' } else { 'x86_64' }
             Invoke-WebRequest "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe" -OutFile rustup-init.exe
-            ./rustup-init.exe -y --profile minimal
+            ./rustup-init.exe -y --profile minimal --default-toolchain none
+            $env:PATH = "$env:USERPROFILE\.cargo\bin;$env:PATH"
             "$env:USERPROFILE\.cargo\bin" >> $env:GITHUB_PATH
           }
+          rustup toolchain install
       - name: Build the service
         run: cargo build --release --locked -p deepwork-daemon
       - name: Build the installer
@@ -121,7 +187,7 @@ jobs:
       - name: End-to-end test
         shell: pwsh
         run: ./.github/scripts/windows-e2e.ps1 -Setup (Get-Item dist/*-setup.exe).FullName
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: windows-e2e-${{ matrix.arch }}

@@ -1,0 +1,69 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Create a block with ...\n2. Start it for ...\n3. ..."
+  - type: dropdown
+    id: os
+    attributes:
+      label: System
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: system
+    attributes:
+      label: Version of the system
+      description: "e.g. Windows 11 24H2, Fedora 42 with GNOME 48, Arch with KDE Plasma 6.4"
+    validations:
+      required: true
+  - type: dropdown
+    id: arch
+    attributes:
+      label: Processor
+      options:
+        - x64 (Intel or AMD)
+        - ARM64
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: DeepWork version
+      description: "`deepworkctl --version`, or Settings → Apps on Windows"
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Windows installer
+        - Linux release download (install.sh)
+        - Built from source
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser, if it's about websites
+  - type: textarea
+    id: log
+    attributes:
+      label: Service log
+      description: "Linux: `journalctl -u deepwork --since -1h`. Windows: C:\\ProgramData\\DeepWork\\deepwork.log"
+      render: text

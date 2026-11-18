@@ -3,7 +3,7 @@
 <h1 align="center">DeepWork</h1>
 
 <p align="center">
-  A website and app blocker for Linux with a GTK4 / libadwaita interface.<br>
+  A website and app blocker for Linux and Windows with a GTK4 / libadwaita interface.<br>
   Block distractions on demand or on a schedule, and lock yourself in so you can't give up halfway through.
 </p>
 
@@ -20,7 +20,11 @@
 </p>
 
 Inspired by [Cold Turkey Blocker](https://getcoldturkey.com) (not affiliated). DeepWork enforces its
-blocks from a root system service, so closing the app doesn't end a block.
+blocks from a system service with administrator rights, so closing the app doesn't end a block.
+
+DeepWork 0.x is in **beta**. [Supported systems, features per platform and known
+limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
+[Privacy](docs/PRIVACY.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ## Features
 
@@ -107,9 +111,20 @@ confirmation and warns if you're in a group such as `docker` that can still get 
 
 ### Linux, from a release
 
-Download `deepwork-<version>-linux-x86_64.tar.gz` from the
-[releases](https://github.com/ichbinstudent/deepwork/releases), unpack it and run the installer as
-your normal user (not root):
+The [releases](https://github.com/ichbinstudent/deepwork/releases) have packages for Debian and
+Ubuntu (`.deb`) and Fedora (`.rpm`), which pull in what DeepWork needs and set up the service:
+
+```sh
+sudo apt install ./deepwork_<version>-1_amd64.deb      # Debian 13+, Ubuntu 25.04+
+sudo dnf install ./deepwork-<version>-1.x86_64.rpm     # Fedora 42+
+```
+
+The user who runs the install through `sudo` may control DeepWork; add others with
+`sudo deepwork-daemon --allow-user <uid>` and `sudo systemctl restart deepwork`. Removing the package
+is refused while a block is locked; `apt purge` also deletes your blocks and statistics.
+
+On other distributions, download `deepwork-<version>-linux-x86_64.tar.gz`, unpack it and run the
+installer as your normal user (not root):
 
 ```sh
 tar -xzf deepwork-*-linux-x86_64.tar.gz
@@ -153,10 +168,11 @@ This installs:
 | who may control the service | `/etc/deepwork/config.json` (`allowed_users`) |
 | blocks and statistics | `/var/lib/deepwork/state.json` |
 
-To remove it, run `./uninstall.sh`. Add `--purge` to also delete your data. Uninstalling is refused
-while a block is locked or a freeze is running.
+To remove it, run `/usr/local/lib/deepwork/uninstall.sh` (it's also in the download). Add `--purge`
+to also delete your data. Uninstalling is refused while a block is locked or a freeze is running.
+The scripts use `sudo`, or `doas` or `run0` where there's no sudo (or whatever `SUDO=` names).
 
-### Windows (experimental)
+### Windows (beta)
 
 Download and run **`deepwork-<version>-windows-x64-setup.exe`**, or `-arm64-setup.exe` on ARM PCs
 (each installer refuses the other kind of PC). It asks for administrator rights, installs DeepWork
@@ -253,8 +269,8 @@ the lock menu).
 
 The Windows backend is checked in CI, and an end-to-end test installs the package on x64 and ARM
 Windows runners, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and
-uninstalls again. It hasn't been used on real machines much yet. The macOS backend compiles but has never run; CI doesn't check it while
-the repository is private. Each module's documentation lists what's still needed.
+uninstalls again. It hasn't been used on real machines much yet. The macOS backend compiles but has
+never run, and CI doesn't check it. Each module's documentation lists what's still needed.
 
 ## Honest limitations
 
@@ -307,7 +323,8 @@ DEEPWORK_DEBUG_PAGE=stats DEEPWORK_DEBUG_SIZE=1000x720 DEEPWORK_DEBUG_SHOT=/tmp/
 `DEEPWORK_DEBUG_OPEN=edit|start|unlock|apps|new` also opens a dialog first.
 
 The CI workflow (`.github/workflows/ci.yml`) runs the format check, Clippy and the tests in an Arch
-Linux container.
+Linux container and on Windows, builds the Windows installers for x64 and ARM64, and tests them
+end to end (install, block, update, uninstall) on Windows runners of both kinds.
 
 ## License
 

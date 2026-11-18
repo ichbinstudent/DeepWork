@@ -5,6 +5,7 @@
 mod browser;
 mod enforcer;
 mod hosts;
+mod persist;
 mod platform;
 mod procs;
 mod server;
@@ -22,7 +23,7 @@ use serde::Deserialize;
 
 use crate::enforcer::Enforcer;
 use crate::platform::Options;
-use crate::state::{Daemon, Persisted};
+use crate::state::Daemon;
 
 /// Write a file atomically (temp file + rename) with the given Unix mode
 /// (ignored elsewhere). Symlinked targets are written in place so the link
@@ -46,7 +47,12 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> 
         f.sync_all()?;
     }
     set_mode(&tmp, mode)?;
-    fs::rename(&tmp, path)
+    fs::rename(&tmp, path).or_else(|e| {
+        // Some files can't be replaced, only rewritten: a mount point (e.g.
+        // /etc/hosts in containers), or a file another program holds open.
+        let _ = fs::remove_file(&tmp);
+        fs::write(path, data).map_err(|_| e)
+    })
 }
 
 /// Set Unix permissions (no-op on other systems).
@@ -258,14 +264,10 @@ fn run() {
     }
 
     let state_file = opts.state_dir.join("state.json");
-    let persisted: Persisted = match fs::read_to_string(&state_file) {
-        Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
-            eprintln!("deepwork: state file is corrupt ({e}); keeping a copy and starting fresh");
-            let _ = fs::copy(&state_file, opts.state_dir.join("state.json.corrupt"));
-            Persisted::default()
-        }),
-        Err(_) => Persisted::default(),
-    };
+    let persisted = persist::load(&state_file).unwrap_or_else(|e| {
+        eprintln!("deepwork: {e}");
+        std::process::exit(1);
+    });
     let allowed = allowed_users(&config_path);
 
     let caps = enforcer.capabilities();

@@ -1,6 +1,6 @@
 [package]
 name = "deepwork"
-description = "DeepWork: a website and app blocker for Linux with a GTK4 / libadwaita interface"
+description = "DeepWork: a website and app blocker for Linux and Windows with a GTK4 / libadwaita interface"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

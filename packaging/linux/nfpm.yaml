@@ -1,0 +1,75 @@
+# .deb and .rpm packages, built by .github/scripts/package-linux.sh with nfpm
+# (which fills in the ${...} placeholders).
+name: deepwork
+arch: amd64
+platform: linux
+version: ${VERSION}
+release: 1
+section: utils
+priority: optional
+maintainer: ${MAINTAINER}
+vendor: DeepWork contributors
+homepage: https://github.com/ichbinstudent/deepwork
+license: GPL-3.0-or-later
+description: |
+  Block distracting websites and apps
+  DeepWork blocks distracting websites and apps, on demand or on a
+  schedule, and can lock a block so you can't give up halfway through.
+  A system service enforces the blocks; the GTK app and deepworkctl
+  control it.
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= ${GLIBC})
+      - libgcc-s1
+      - libgtk-4-1 (>= 4.14)
+      - libadwaita-1-0 (>= 1.7)
+      - systemd
+    recommends:
+      - nftables
+  rpm:
+    depends:
+      - glibc >= ${GLIBC}
+      - gtk4 >= 4.14
+      - libadwaita >= 1.7
+      - systemd
+    recommends:
+      - nftables
+
+contents:
+  - src: ${STAGE}/bin/deepwork
+    dst: /usr/bin/deepwork
+    file_info: { mode: 0755 }
+  - src: ${STAGE}/bin/deepwork-daemon
+    dst: /usr/bin/deepwork-daemon
+    file_info: { mode: 0755 }
+  - src: ${STAGE}/bin/deepworkctl
+    dst: /usr/bin/deepworkctl
+    file_info: { mode: 0755 }
+  - src: ${STAGE}/deepwork.service
+    dst: /usr/lib/systemd/system/deepwork.service
+  - src: data/io.github.ichbinstudent.DeepWork.desktop
+    dst: /usr/share/applications/io.github.ichbinstudent.DeepWork.desktop
+  - src: data/io.github.ichbinstudent.DeepWork-autostart.desktop
+    dst: /etc/xdg/autostart/io.github.ichbinstudent.DeepWork-autostart.desktop
+    type: config
+  - src: data/io.github.ichbinstudent.DeepWork.metainfo.xml
+    dst: /usr/share/metainfo/io.github.ichbinstudent.DeepWork.metainfo.xml
+  - src: assets/icon.svg
+    dst: /usr/share/icons/hicolor/scalable/apps/io.github.ichbinstudent.DeepWork.svg
+  - src: ${STAGE}/copyright
+    dst: /usr/share/doc/deepwork/copyright
+    packager: deb
+  - src: LICENSE
+    dst: /usr/share/licenses/deepwork/LICENSE
+    packager: rpm
+  - src: README.md
+    dst: /usr/share/doc/deepwork/README.md
+  - src: ${STAGE}/THIRD-PARTY-NOTICES.txt
+    dst: /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt
+
+scripts:
+  postinstall: packaging/linux/postinst.sh
+  preremove: packaging/linux/prerm.sh
+  postremove: packaging/linux/postrm.sh

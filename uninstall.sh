@@ -6,6 +6,13 @@ set -euo pipefail
 PREFIX="${PREFIX:-/usr/local}"
 BINDIR="$PREFIX/bin"
 DATADIR="$PREFIX/share"
+# Run a command as root with sudo, doas or run0 (or $SUDO).
+if [[ -z "${SUDO:-}" ]]; then
+    for c in sudo doas run0; do
+        command -v "$c" >/dev/null && SUDO=$c && break
+    done
+fi
+[[ -n "${SUDO:-}" ]] || { echo "Needs sudo, doas or run0 (or set SUDO)." >&2; exit 1; }
 PURGE=0
 [[ "${1:-}" == "--purge" ]] && PURGE=1
 
@@ -16,19 +23,20 @@ if command -v deepworkctl >/dev/null && deepworkctl locked 2>/dev/null; then
 fi
 
 pkill -x deepwork 2>/dev/null || true
-sudo systemctl disable --now deepwork.service 2>/dev/null || true
+$SUDO systemctl disable --now deepwork.service 2>/dev/null || true
 # Remove our /etc/hosts section and browser policies.
-sudo "$BINDIR/deepwork-daemon" --cleanup || true
+$SUDO "$BINDIR/deepwork-daemon" --cleanup || true
 
-sudo rm -f "$BINDIR/deepwork" "$BINDIR/deepwork-daemon" "$BINDIR/deepworkctl" \
+$SUDO rm -f "$BINDIR/deepwork" "$BINDIR/deepwork-daemon" "$BINDIR/deepworkctl" \
     "$DATADIR/applications/io.github.ichbinstudent.DeepWork.desktop" \
     "$DATADIR/icons/hicolor/scalable/apps/io.github.ichbinstudent.DeepWork.svg" \
     /etc/xdg/autostart/io.github.ichbinstudent.DeepWork-autostart.desktop \
     /etc/systemd/system/deepwork.service
-sudo systemctl daemon-reload
+$SUDO rm -rf "$PREFIX/lib/deepwork" "$DATADIR/doc/deepwork"
+$SUDO systemctl daemon-reload
 
 if [[ $PURGE -eq 1 ]]; then
-    sudo rm -rf /var/lib/deepwork /etc/deepwork
+    $SUDO rm -rf /var/lib/deepwork /etc/deepwork
     echo "DeepWork and all its data were removed."
 else
     echo "DeepWork was removed. Your blocks are kept in /var/lib/deepwork (use --purge to delete them)."

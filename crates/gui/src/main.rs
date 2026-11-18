@@ -154,6 +154,10 @@ fn main() -> glib::ExitCode {
     use_bundled_image_loaders();
     gio::resources_register_include!("deepwork.gresource").expect("embedded resources");
 
+    if std::env::args().any(|a| a == "--version") {
+        println!("deepwork {}", deepwork_core::VERSION);
+        return glib::ExitCode::SUCCESS;
+    }
     let background = std::env::args().any(|a| a == "--background");
     // One copy per user: a second one shows the first one's window instead.
     #[cfg(windows)]
@@ -186,8 +190,14 @@ fn main() -> glib::ExitCode {
                     let dialog = adw::AboutDialog::builder()
                         .application_name("DeepWork")
                         .application_icon(APP_ID)
-                        .version(deepwork_core::VERSION)
+                        .version(if deepwork_core::VERSION.starts_with("0.") {
+                            format!("{} (beta)", deepwork_core::VERSION)
+                        } else {
+                            deepwork_core::VERSION.to_string()
+                        })
                         .developer_name("DeepWork contributors")
+                        .website("https://github.com/ichbinstudent/deepwork")
+                        .issue_url("https://github.com/ichbinstudent/deepwork/issues")
                         .license_type(gtk::License::Gpl30)
                         .comments("Block distracting websites and apps, on a schedule or on demand, with locks you can't easily talk your way out of.")
                         .build();

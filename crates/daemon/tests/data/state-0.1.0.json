@@ -1,0 +1,80 @@
+{
+  "format": 1,
+  "blocks": [
+    {
+      "id": "zpwjjjz8hmpg",
+      "config": {
+        "name": "Social",
+        "color": "blue",
+        "websites": [],
+        "apps": [],
+        "lists": [
+          "social"
+        ],
+        "schedule": [],
+        "schedule_enabled": false,
+        "lock": "strict",
+        "random_length": 32,
+        "allowance_minutes": 0,
+        "break_every": 0,
+        "break_length": 0,
+        "protect_until": 0.0
+      },
+      "password_hash": "",
+      "rt": {
+        "session_start": 1795001726.8003218,
+        "session_until": 1795005326.8003218,
+        "skip_until": 0.0,
+        "unlocked_until": 0.0,
+        "pause_until": 0.0,
+        "lock_boot_id": "00000000-0000-0000-0000-000000000000",
+        "protect_boot_id": "",
+        "allowance_used": {}
+      }
+    },
+    {
+      "id": "khzdqcgkspkx",
+      "config": {
+        "name": "News",
+        "color": "blue",
+        "websites": [
+          "example.com",
+          "news.ycombinator.com"
+        ],
+        "apps": [],
+        "lists": [],
+        "schedule": [],
+        "schedule_enabled": false,
+        "lock": "none",
+        "random_length": 32,
+        "allowance_minutes": 0,
+        "break_every": 0,
+        "break_length": 0,
+        "protect_until": 0.0
+      },
+      "password_hash": "",
+      "rt": {
+        "session_start": 0.0,
+        "session_until": 0.0,
+        "skip_until": 0.0,
+        "unlocked_until": 0.0,
+        "pause_until": 0.0,
+        "lock_boot_id": "",
+        "protect_boot_id": "",
+        "allowance_used": {}
+      }
+    }
+  ],
+  "frozen_until": 0.0,
+  "stats": {
+    "2026-11-18": {
+      "focus_seconds": 1.001794253,
+      "blocked_apps": 0,
+      "apps": {}
+    }
+  },
+  "settings": {
+    "block_doh": true,
+    "https_filter": false
+  }
+}

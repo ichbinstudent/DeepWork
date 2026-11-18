@@ -1,4 +1,4 @@
-//! Windows (experimental): website blocking through the hosts file and
+//! Windows: website blocking through the hosts file and
 //! browser policies (Chrome, Edge, Brave and Chromium in the registry,
 //! Firefox's `policies.json`), closing open connections to blocked sites,
 //! and the named pipe the app and `deepworkctl` talk to. It runs as the

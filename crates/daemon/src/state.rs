@@ -28,9 +28,17 @@ fn check_protection(cfg: &BlockConfig, now: f64) -> R<()> {
     Ok(())
 }
 
+/// Version of the state file's format. Bump it only for changes older
+/// releases can't read; every release must keep loading all earlier
+/// formats (tested with the files in `tests/data`).
+pub const STATE_FORMAT: u32 = 1;
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Persisted {
+    /// [`STATE_FORMAT`] of the release that wrote it (0: written before
+    /// formats were numbered, same as 1).
+    pub format: u32,
     pub blocks: Vec<Block>,
     pub frozen_until: f64,
     pub stats: Stats,
@@ -73,7 +81,8 @@ pub struct Daemon {
 type R<T> = Result<T, String>;
 
 impl Daemon {
-    pub fn new(p: Persisted, boot_id: String, caps: Capabilities) -> Self {
+    pub fn new(mut p: Persisted, boot_id: String, caps: Capabilities) -> Self {
+        p.format = STATE_FORMAT;
         Self {
             p,
             boot_id,

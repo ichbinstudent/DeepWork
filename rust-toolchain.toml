@@ -1,0 +1,6 @@
+# The Rust release that builds and tests DeepWork (CI and releases use it
+# through rustup; the MSYS2 build of the Windows app uses MSYS2's Rust).
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

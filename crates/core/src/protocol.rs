@@ -102,7 +102,9 @@ impl Response {
 }
 
 /// What a client gets to see about a block (never the password hash).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Fields missing from an older service's answer take their defaults.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BlockStatus {
     pub id: String,
     pub config: BlockConfig,
