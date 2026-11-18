@@ -89,8 +89,7 @@ jobs:
         run: .github/scripts/linux-package-test.sh dist/${{ matrix.package }}
       - name: rpmlint
         if: matrix.image == 'fedora:42'
-        # Informational for now.
-        run: dnf install -y -q rpmlint && rpmlint dist/*.rpm || true
+        run: dnf install -y -q rpmlint && rpmlint dist/*.rpm
 
   # The release binaries (built on the oldest supported system) on the newest
   # libraries.

@@ -67,14 +67,17 @@ mkdir -p "$stage/man"
 for m in packaging/linux/man/*; do
     gzip -9n <"$m" >"$stage/man/$(basename "$m").gz"
 done
-{
-    echo "deepwork ($version-1) unstable; urgency=medium"
-    echo
-    echo "  * DeepWork $version. See /usr/share/doc/deepwork/README.md and"
-    echo "    https://github.com/ichbinstudent/deepwork/blob/main/CHANGELOG.md"
-    echo
-    echo " -- $maintainer  $(LC_ALL=C date -u -R -d "@$when")"
-} | gzip -9n >"$stage/changelog.Debian.gz"
+# The packages' changelogs (Debian and RPM), written by nfpm.
+cat >"$stage/changelog.yml" <<CHANGELOG
+- semver: $version-1
+  date: $(date -u -d "@$when" +%Y-%m-%dT%H:%M:%SZ)
+  packager: $maintainer
+  deb:
+    urgency: medium
+    distributions: [unstable]
+  changes:
+    - note: "DeepWork $version, see https://github.com/ichbinstudent/deepwork/blob/main/CHANGELOG.md"
+CHANGELOG
 
 nfpm=$(command -v nfpm || true)
 if [[ -z "$nfpm" ]]; then

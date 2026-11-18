@@ -11,6 +11,7 @@ maintainer: ${MAINTAINER}
 vendor: DeepWork contributors
 homepage: https://github.com/ichbinstudent/deepwork
 license: GPL-3.0-or-later
+changelog: ${STAGE}/changelog.yml
 description: |
   Block distracting websites and apps
   DeepWork blocks distracting websites and apps, on demand or on a
@@ -53,7 +54,7 @@ contents:
     dst: /usr/share/applications/io.github.ichbinstudent.DeepWork.desktop
   - src: data/io.github.ichbinstudent.DeepWork-autostart.desktop
     dst: /etc/xdg/autostart/io.github.ichbinstudent.DeepWork-autostart.desktop
-    type: config
+    type: config|noreplace
   - src: data/io.github.ichbinstudent.DeepWork.metainfo.xml
     dst: /usr/share/metainfo/io.github.ichbinstudent.DeepWork.metainfo.xml
   - src: assets/icon.svg
@@ -61,22 +62,25 @@ contents:
   - src: ${STAGE}/copyright
     dst: /usr/share/doc/deepwork/copyright
     packager: deb
-  - src: ${STAGE}/changelog.Debian.gz
-    dst: /usr/share/doc/deepwork/changelog.Debian.gz
-    packager: deb
   - src: ${STAGE}/man/deepwork.1.gz
     dst: /usr/share/man/man1/deepwork.1.gz
+    type: doc
   - src: ${STAGE}/man/deepworkctl.1.gz
     dst: /usr/share/man/man1/deepworkctl.1.gz
+    type: doc
   - src: ${STAGE}/man/deepwork-daemon.8.gz
     dst: /usr/share/man/man8/deepwork-daemon.8.gz
+    type: doc
   - src: LICENSE
     dst: /usr/share/licenses/deepwork/LICENSE
+    type: license
     packager: rpm
   - src: README.md
     dst: /usr/share/doc/deepwork/README.md
+    type: doc
   - src: ${STAGE}/THIRD-PARTY-NOTICES.txt
     dst: /usr/share/doc/deepwork/THIRD-PARTY-NOTICES.txt
+    type: doc
 
 scripts:
   postinstall: packaging/linux/postinst.sh
