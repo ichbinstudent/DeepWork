@@ -7,6 +7,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::path::Path;
 use std::ptr::null_mut;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use windows_sys::Win32::Foundation::{
@@ -38,6 +39,43 @@ use crate::state::Daemon;
 /// and write (`FILE_GENERIC_READ | FILE_WRITE_DATA`), but not create pipe
 /// instances, so nobody can pose as the service.
 const SDDL: &str = "D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;0x0012008b;;;AU)";
+
+/// Refusals not yet read by clients that may not control DeepWork. They
+/// have places of their own, so leaving refusals unread can't use up the
+/// connections of the users who may.
+const MAX_REFUSALS: usize = 8;
+static REFUSALS: AtomicUsize = AtomicUsize::new(0);
+
+/// One of the [`MAX_REFUSALS`]; freed when dropped.
+struct Refusal(());
+
+impl Refusal {
+    fn take() -> Option<Refusal> {
+        if REFUSALS.fetch_add(1, Ordering::SeqCst) >= MAX_REFUSALS {
+            REFUSALS.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Refusal(()))
+    }
+}
+
+impl Drop for Refusal {
+    fn drop(&mut self) {
+        REFUSALS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
+/// Answer one client, then wait until it has read everything (for a client
+/// that never reads, as long as the process lives) and disconnect.
+fn serve_one(pipe: File, daemon: Arc<Mutex<Daemon>>, permitted: bool) {
+    handle_conn(&pipe, &pipe, daemon, permitted);
+    let h = pipe.as_raw_handle() as HANDLE;
+    // SAFETY: `pipe` still owns the handle.
+    unsafe {
+        FlushFileBuffers(h);
+        DisconnectNamedPipe(h);
+    }
+}
 
 /// Serve clients on the pipe at `path` until the process ends.
 pub fn serve(
@@ -101,24 +139,28 @@ pub fn serve(
         if !connected {
             continue;
         }
-        let Some(slot) = Slot::take() else {
-            // SAFETY: `pipe` still owns the handle.
-            unsafe { DisconnectNamedPipe(h) };
-            continue;
-        };
         let daemon = daemon.clone();
-        let allowed = allowed.clone();
-        std::thread::spawn(move || {
-            let _slot = slot;
-            let ok = permitted(client(&pipe).as_ref(), allowed.as_deref());
-            handle_conn(&pipe, &pipe, daemon, ok);
-            let h = pipe.as_raw_handle() as HANDLE;
-            // SAFETY: `pipe` still owns the handle.
-            unsafe {
-                FlushFileBuffers(h);
-                DisconnectNamedPipe(h);
-            }
-        });
+        if permitted(client(&pipe).as_ref(), allowed.as_deref()) {
+            let Some(slot) = Slot::take() else {
+                // SAFETY: `pipe` still owns the handle.
+                unsafe { DisconnectNamedPipe(h) };
+                continue;
+            };
+            std::thread::spawn(move || {
+                let _slot = slot;
+                serve_one(pipe, daemon, true);
+            });
+        } else {
+            let Some(refusal) = Refusal::take() else {
+                // SAFETY: `pipe` still owns the handle.
+                unsafe { DisconnectNamedPipe(h) };
+                continue;
+            };
+            std::thread::spawn(move || {
+                let _refusal = refusal;
+                serve_one(pipe, daemon, false);
+            });
+        }
     }
 }
 

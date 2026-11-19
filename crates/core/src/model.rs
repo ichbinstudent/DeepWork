@@ -128,8 +128,14 @@ impl LockKind {
 
 /// Filter list every hardcore block includes, so tunnels can't get around it.
 pub const HARDCORE_LIST: &str = "vpn";
-/// Longest time a hardcore block may keep administrator rights away in one go.
+/// Longest time hardcore blocks may keep administrator rights away in one
+/// go, all hardcore blocks together.
 pub const MAX_HARDCORE_SECONDS: f64 = 7.0 * DAY;
+/// How long administrator rights must be back before hardcore blocks may
+/// take them away again: shorter gaps between hardcore blocks count as one
+/// stretch for [`MAX_HARDCORE_SECONDS`], and after that long a stretch the
+/// rights come back for at least this long.
+pub const HARDCORE_BREAK: f64 = 3600.0;
 
 /// User-editable settings of a block.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -504,14 +510,45 @@ pub fn weakening_reasons(
 
 // --------------------------------------------------------------------------- time
 
+pub use jiff::tz::TimeZone;
+
+/// The system's time zone, which schedules follow.
+pub fn system_zone() -> TimeZone {
+    TimeZone::system()
+}
+
+/// How many seconds `zone` is ahead of UTC at `ts`.
+pub fn utc_offset(zone: &TimeZone, ts: f64) -> i32 {
+    jiff::Timestamp::from_second(ts.floor() as i64).map_or(0, |t| zone.to_offset(t).seconds())
+}
+
+/// A time zone that is always `seconds` ahead of UTC (within ±25 hours).
+pub fn fixed_zone(seconds: i32) -> TimeZone {
+    jiff::tz::Offset::from_seconds(seconds).map_or(TimeZone::UTC, TimeZone::fixed)
+}
+
+/// Whether the clocks of two time zones show different times at `ts`
+/// (daylight saving time doesn't make a zone differ from itself).
+pub fn zones_differ(a: &TimeZone, b: &TimeZone, ts: f64) -> bool {
+    utc_offset(a, ts) != utc_offset(b, ts)
+}
+
 /// A Unix timestamp in the system's time zone.
 pub fn local_time(ts: f64) -> Option<jiff::ZonedDateTime> {
+    local_time_in(ts, &TimeZone::system())
+}
+
+fn local_time_in(ts: f64, zone: &TimeZone) -> Option<jiff::ZonedDateTime> {
     let t = jiff::Timestamp::from_second(ts.floor() as i64).ok()?;
-    Some(t.to_zoned_datetime(jiff::tz::TimeZone::system()))
+    Some(t.to_zoned_datetime(zone.clone()))
 }
 
 pub fn minute_of_week(ts: f64) -> f64 {
-    let d = local_time(ts).unwrap_or_else(jiff::ZonedDateTime::now);
+    minute_of_week_in(ts, &TimeZone::system())
+}
+
+pub fn minute_of_week_in(ts: f64, zone: &TimeZone) -> f64 {
+    let d = local_time_in(ts, zone).unwrap_or_else(jiff::ZonedDateTime::now);
     d.weekday().to_monday_zero_offset() as f64 * 1440.0
         + d.hour() as f64 * 60.0
         + d.minute() as f64
@@ -530,10 +567,15 @@ pub fn today_key(ts: f64) -> String {
 /// Ranges that touch across the Sunday→Monday wrap count as one window. A
 /// schedule covering the whole week reports a rolling one-week horizon.
 pub fn schedule_window(ranges: &[[u32; 2]], now: f64) -> Option<(f64, f64)> {
+    schedule_window_in(ranges, now, &TimeZone::system())
+}
+
+/// [`schedule_window`] in the given time zone.
+pub fn schedule_window_in(ranges: &[[u32; 2]], now: f64, zone: &TimeZone) -> Option<(f64, f64)> {
     if ranges.is_empty() {
         return None;
     }
-    let mow = minute_of_week(now);
+    let mow = minute_of_week_in(now, zone);
     let mut unrolled: Vec<[f64; 2]> = (0..3)
         .flat_map(|k| {
             ranges.iter().map(move |r| {
@@ -633,10 +675,15 @@ impl Block {
     }
 
     pub fn sched_window(&self, now: f64) -> Option<(f64, f64)> {
+        self.sched_window_in(now, &TimeZone::system())
+    }
+
+    /// [`Block::sched_window`] as if the system were in another time zone.
+    pub fn sched_window_in(&self, now: f64, zone: &TimeZone) -> Option<(f64, f64)> {
         if !self.config.schedule_enabled || self.rt.skip_until > now {
             return None;
         }
-        schedule_window(&self.config.schedule, now)
+        schedule_window_in(&self.config.schedule, now, zone)
     }
 
     /// The enforcement window `(start, end)` covering `now`, if any.
@@ -1099,10 +1146,30 @@ mod tests {
 
     #[test]
     fn passwords_roundtrip() {
-        let h = hash_password("hunter2");
-        assert!(verify_password("hunter2", &h));
-        assert!(!verify_password("hunter3", &h));
-        assert!(!verify_password("hunter2", "garbage"));
+        // Generated, so no password is written into the code.
+        let password = random_text(12);
+        let other = password[1..].to_string();
+        let h = hash_password(&password);
+        assert!(verify_password(&password, &h));
+        assert!(!verify_password(&other, &h));
+        assert!(!verify_password(&password, "garbage"));
+    }
+
+    #[test]
+    fn schedules_in_other_time_zones() {
+        let sched = vec![[9 * 60, 17 * 60]]; // Monday 9:00 to 17:00
+        let now = ts(2026, 11, MON, 10, 0);
+        let here = system_zone();
+        assert_eq!(
+            schedule_window_in(&sched, now, &here),
+            schedule_window(&sched, now)
+        );
+        // Eight hours further east it's 18:00 there: the window is over.
+        let east = fixed_zone(utc_offset(&here, now) + 8 * 3600);
+        assert!(zones_differ(&here, &east, now));
+        assert!(!zones_differ(&here, &here.clone(), now));
+        assert!(schedule_window_in(&sched, now, &east).is_none());
+        assert_eq!(minute_of_week_in(now, &east), 18.0 * 60.0);
     }
 
     #[test]

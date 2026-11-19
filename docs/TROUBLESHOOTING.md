@@ -21,8 +21,8 @@ Only the user who installed DeepWork and administrators may control it.
 - Windows: in an administrator terminal run `deepwork-daemon --allow-user <SID>` (your SID is in
   `whoami /user`), then `sc stop DeepWork` and `sc start DeepWork`.
 
-If `config.json` is broken, only administrators may control DeepWork until it's fixed; the log
-says so.
+If `config.json` is missing, broken or lists nobody, only administrators may control DeepWork
+until it's fixed; the log says so.
 
 ## A site is still reachable
 

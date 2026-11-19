@@ -51,7 +51,9 @@ pub fn platform(opts: &Options) -> Platform {
             chromium_store: None,
             firefox: Some((FIREFOX_POLICY, FIREFOX_MARKERS)),
         }),
-        processes: Some(Box::new(procs::ProcFs)),
+        processes: Some(Box::new(procs::ProcFs {
+            uid_min: opts.filter_uid_min,
+        })),
         net,
         admin: Some(Box::new(hardcore::Hardcore::new(
             hardcore::Paths::new(&opts.root, &opts.state_dir),

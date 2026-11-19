@@ -734,7 +734,8 @@ pub fn open(ctx: &Rc<Ctx>, existing: Option<&BlockStatus>) {
             "While the block runs, nobody on this computer gets administrator rights: no sudo, \
              su, pkexec or admin passwords, no installing software and no changing the clock. \
              VPN apps, Tor and web proxies are blocked, and encrypted DNS blocking and HTTPS \
-             filtering are always on. Restarting doesn't end it. At most 7 days in one go.",
+             filtering are always on. Restarting doesn't end it. At most 7 days in a row, \
+             counting every hardcore block.",
         )
         .build();
     hardcore_row.add_prefix(&gtk::Image::from_icon_name("dialog-warning-symbolic"));

@@ -46,6 +46,8 @@ and the service refuses it.
   covered by the URL blocklist.
 - A page that is already open loses its connection when a block starts, but its tab stays open
   (it shows the site's own "offline" state until it is reloaded).
+- Schedules follow the computer's time zone (on Windows any user may change it). Changing it
+  doesn't end a scheduled block that is running, but later scheduled times move with it.
 
 **Windows:**
 - App blocking, Freeze, the network protections, the *Until restart* lock and hardcore mode aren't

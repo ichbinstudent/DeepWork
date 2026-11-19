@@ -23,6 +23,7 @@ pub struct Enforcer {
     policies: Option<Policies>,
     killer: Option<Killer>,
     last_domains: Option<BTreeSet<String>>,
+    last_priority: Option<Vec<String>>,
     last_doh: bool,
     last_hosts_check: Instant,
     last_lock: Option<Instant>,
@@ -53,6 +54,7 @@ impl Enforcer {
             policies,
             killer,
             last_domains: None,
+            last_priority: None,
             last_doh: false,
             last_hosts_check: Instant::now(),
             last_lock: None,
@@ -75,8 +77,10 @@ impl Enforcer {
 
     /// Returns `(app, block)` pairs that were just closed.
     pub fn apply(&mut self, plan: &Plan) -> Vec<(String, String)> {
+        // The order matters too: it decides which domains get subdomains in
+        // the hosts file and a place in Chromium's blocklist.
         let changed =
-            self.last_domains.as_ref() != Some(&plan.domains) || self.last_doh != plan.block_doh;
+            self.last_priority.as_ref() != Some(&plan.priority) || self.last_doh != plan.block_doh;
         let exact: BTreeSet<String> = if plan.block_doh {
             DOH_HOSTS.iter().map(|h| h.to_string()).collect()
         } else {
@@ -95,14 +99,14 @@ impl Enforcer {
             } else {
                 vec![]
             };
-            match self.sync_hosts(&plan.domains, &exact) {
+            match self.sync_hosts(&plan.priority, &exact) {
                 Ok(true) => self.platform.system.flush_dns(),
                 Ok(false) => {}
                 Err(e) => eprintln!("deepwork: cannot update the hosts file: {e}"),
             }
             if changed {
                 if let Some(p) = &self.policies
-                    && let Err(e) = p.apply(&plan.domains)
+                    && let Err(e) = p.apply(&plan.priority)
                 {
                     eprintln!("deepwork: cannot update browser policies: {e}");
                 }
@@ -120,6 +124,7 @@ impl Enforcer {
                     self.cutting = Some((set, Instant::now(), 0));
                 }
                 self.last_domains = Some(plan.domains.clone());
+                self.last_priority = Some(plan.priority.clone());
                 self.last_doh = plan.block_doh;
                 if let Some(net) = self.platform.net.as_mut() {
                     let mut set: HashSet<String> = plan.domains.iter().cloned().collect();
@@ -186,11 +191,7 @@ impl Enforcer {
     }
 
     /// Returns whether the file was rewritten.
-    fn sync_hosts(
-        &self,
-        domains: &BTreeSet<String>,
-        exact: &BTreeSet<String>,
-    ) -> std::io::Result<bool> {
+    fn sync_hosts(&self, domains: &[String], exact: &BTreeSet<String>) -> std::io::Result<bool> {
         let Some(path) = &self.hosts_path else {
             return Ok(false);
         };
@@ -208,7 +209,7 @@ impl Enforcer {
         if let Some(admin) = self.platform.admin.as_mut() {
             admin.release();
         }
-        self.sync_hosts(&BTreeSet::new(), &BTreeSet::new())?;
+        self.sync_hosts(&[], &BTreeSet::new())?;
         if let Some(net) = self.platform.net.as_mut() {
             net.cleanup();
         }

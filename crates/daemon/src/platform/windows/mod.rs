@@ -18,11 +18,11 @@
 //!   Administrators only takes effect at the next sign-in, so it is weak.
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use super::{Options, Paths, Platform, System, spawn_quiet};
 use crate::browser::{Layout, PolicyStore};
 
+mod acl;
 mod chromium;
 mod pipe;
 pub mod service;
@@ -52,8 +52,7 @@ pub fn platform(opts: &Options) -> Platform {
         opts.root.join("etc").join("hosts")
     } else {
         if let Some(base) = opts.state_dir.parent() {
-            restrict_to_admins(base);
-            log_to_file(&base.join("deepwork.log"));
+            log_to_file(&base.join(LOG));
         }
         hosts_path()
     };
@@ -109,6 +108,18 @@ impl System for WindowsSystem {
     }
 }
 
+const LOG: &str = "deepwork.log";
+
+/// Make the data folder (the parent of `state_dir`) belong to
+/// administrators, before anything in it is read or written: only they may
+/// change it, and only they may read the state and the log. See [`acl`].
+pub fn prepare_data_dir(state_dir: &Path) -> std::io::Result<()> {
+    let (Some(base), Some(state)) = (state_dir.parent(), state_dir.file_name()) else {
+        return Ok(());
+    };
+    acl::secure_data_dir(base, &[&state.to_string_lossy()], &[LOG])
+}
+
 /// Send the service's messages (stderr) to a log file, since it runs
 /// without a console. The log starts over once it passes 1 MB.
 fn log_to_file(path: &Path) {
@@ -125,47 +136,11 @@ fn log_to_file(path: &Path) {
     let Ok(file) = opts.create(true).open(path) else {
         return;
     };
+    let _ = acl::make_private(path);
     // SAFETY: the handle is handed over to the process for good.
     unsafe { SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle()) };
     eprintln!(
         "--- service started (Unix time {:.0})",
         deepwork_core::now()
     );
-}
-
-/// Let only SYSTEM and administrators change `dir` (state and config), and
-/// make administrators its owner, so nobody else can edit the blocks or the
-/// list of allowed users. Normal users may still read it.
-fn restrict_to_admins(dir: &Path) {
-    let icacls = |target: &Path, args: &[&str]| {
-        Command::new("icacls")
-            .arg(target)
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-    };
-    // Well-known SIDs, so this works in every language: SYSTEM,
-    // Administrators, Users. The rules go on the folder only; everything
-    // inside is reset to inherit them (folder rules on a file would leave
-    // the file with no access at all).
-    let ok = icacls(dir, &["/setowner", "*S-1-5-32-544", "/T", "/C", "/Q"])
-        && icacls(
-            dir,
-            &[
-                "/inheritance:r",
-                "/grant:r",
-                "*S-1-5-18:(OI)(CI)F",
-                "*S-1-5-32-544:(OI)(CI)F",
-                "*S-1-5-32-545:(OI)(CI)RX",
-                "/C",
-                "/Q",
-            ],
-        );
-    if !ok {
-        eprintln!("deepwork: cannot restrict access to {}", dir.display());
-    }
-    // Fails harmlessly when the folder is still empty.
-    icacls(&dir.join("*"), &["/reset", "/T", "/C", "/Q"]);
 }

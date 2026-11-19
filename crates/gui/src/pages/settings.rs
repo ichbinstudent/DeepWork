@@ -73,8 +73,9 @@ pub fn build(ctx: &Rc<Ctx>) -> gtk::Widget {
         .title("Filter all web traffic")
         .subtitle(
             "Checks the site name of every web connection, so blocks also work in Flatpak \
-             browsers, with custom DNS or direct IP addresses. Nothing is decrypted. HTTP/3 is \
-             turned off while filtering, so browsers use regular HTTPS.",
+             browsers, with custom DNS or direct IP addresses. Nothing is decrypted. Connections \
+             that don't name their site are refused, and HTTP/3 is turned off while filtering, \
+             so browsers use regular HTTPS.",
         )
         .build();
     let status = adw::ActionRow::builder().title("Status").build();

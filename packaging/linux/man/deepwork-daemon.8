@@ -18,6 +18,13 @@ to apply.
 Remove DeepWork's entries from the hosts file, the browser policies and the firewall, and give
 administrator rights back after hardcore mode, then exit.
 .TP
+.BI \-\-filter\-uid\-min " uid"
+The lowest uid of a person's account (default 1000). Only their processes are network-filtered or
+closed by app blocks; root and system accounts never are.
+.TP
+.BI \-\-proxy\-ports " tls,http"
+Ports of the HTTPS and HTTP filter on the loopback interface (default: any free ports).
+.TP
 .BI \-\-sandbox " dir"
 Keep all files under \fIdir\fR and don't touch the system (for testing).
 .TP
@@ -32,7 +39,7 @@ Print the version.
 Blocks, locks, statistics and settings.
 .TP
 /etc/deepwork/config.json
-Who may control DeepWork (\fBallowed_users\fR).
+Who may control DeepWork (\fBallowed_users\fR). Without it, or with nobody listed, only root may.
 .SH SEE ALSO
 .BR deepwork (1),
 .BR deepworkctl (1)

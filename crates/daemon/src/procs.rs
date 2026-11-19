@@ -11,11 +11,17 @@ use crate::platform::ProcessTable;
 #[derive(Debug, Clone, Default)]
 pub struct Proc {
     pub pid: u32,
-    /// Runs as root / SYSTEM. Such processes are never closed.
+    /// Runs as root / SYSTEM or a system account (a service), not as a
+    /// person's user account. Such processes are never closed.
     pub privileged: bool,
-    /// Short process name.
+    /// Short process name. A process can change its own, so it is only used
+    /// to find matches, never to spare a process.
     pub comm: String,
     pub exe: String,
+    /// The executable file belongs to an administrator (it was installed,
+    /// not put there by a user). Only then does a protected name such as
+    /// `bash` or `systemd` spare the process.
+    pub system_exe: bool,
     pub argv0: String,
     /// Full command line, arguments separated by spaces.
     pub cmdline: String,
@@ -93,7 +99,7 @@ impl Killer {
             if p.pid <= 1 || p.pid == self.own_pid || p.privileged {
                 continue;
             }
-            if is_protected_process(&p.comm) || is_protected_process(basename(&p.exe)) {
+            if p.system_exe && is_protected_process(basename(&p.exe)) {
                 continue;
             }
             let Some((rule, block)) = rules.iter().find(|(r, _)| matches(r, &p)) else {
@@ -207,6 +213,8 @@ mod tests {
         let p = |pid, comm: &str, privileged| Proc {
             pid,
             comm: comm.into(),
+            exe: format!("/usr/bin/{comm}"),
+            system_exe: true,
             privileged,
             start_time: 1,
             ..Default::default()
@@ -228,5 +236,40 @@ mod tests {
         let reported = k.enforce(&rules);
         assert_eq!(reported, vec![("steam".to_string(), "Games".to_string())]);
         assert_eq!(*log.lock().unwrap(), vec![(10, false)]);
+    }
+
+    /// A blocked program can't hide behind a protected name: the name it
+    /// gives itself doesn't count, and neither does a protected file name
+    /// on a copy a user made.
+    #[test]
+    fn protected_names_cant_be_borrowed() {
+        let p = |pid, comm: &str, exe: &str, system_exe| Proc {
+            pid,
+            comm: comm.into(),
+            exe: exe.into(),
+            system_exe,
+            cmdline: format!("{exe} net.minecraft.client.main.Main"),
+            start_time: 1,
+            ..Default::default()
+        };
+        let log = std::sync::Arc::new(std::sync::Mutex::new(vec![]));
+        let table = Fake(
+            vec![
+                // renamed itself with prctl(PR_SET_NAME)
+                p(20, "bash", "/usr/lib/jvm/bin/java", true),
+                // a copy of the game named like a shell
+                p(21, "bash", "/home/a/.local/bin/bash", false),
+                // a real shell whose command line happens to match
+                p(22, "bash", "/usr/bin/bash", true),
+            ],
+            log.clone(),
+        );
+        let mut k = Killer::new(Box::new(table));
+        let rules = [(
+            "cmd:net.minecraft.client.main.Main".to_string(),
+            "Games".to_string(),
+        )];
+        k.enforce(&rules);
+        assert_eq!(*log.lock().unwrap(), vec![(20, false), (21, false)]);
     }
 }

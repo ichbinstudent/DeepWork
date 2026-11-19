@@ -6,6 +6,37 @@ and versions follow [Semantic Versioning](https://semver.org) (see
 
 ## [Unreleased]
 
+### Security
+
+Fixes for problems found by code scanning:
+
+- Without `config.json` (e.g. a Linux package installed from a root shell, where `SUDO_UID` isn't
+  set), every local user could control DeepWork. Now only administrators may until users are
+  added; the package also recognises installs through `doas`.
+- Windows: the data folder could be prepared by a standard user before installation and keep
+  their access; now a folder that doesn't belong to administrators is moved aside, and every
+  permission in it is set from scratch. Lock-password hashes and the log are no longer readable
+  by standard users. The installer no longer learns who started it from a file in the shared
+  `Public` folder, and users who may not control DeepWork can no longer use up the service's
+  connections by leaving its answers unread.
+- Windows: keys that DeepWork created for browser policies are only removed when nothing else was
+  put into them.
+- Hardcore mode: all hardcore blocks together keep administrator rights away for at most 7 days in
+  a row (chaining blocks, or turning a long session hardcore, no longer gets around it); then the
+  rights come back for at least an hour.
+- App blocking no longer closes processes of system accounts (services), and a program can't
+  escape it by renaming itself to a protected name such as `bash`.
+- HTTPS filter: every plain-HTTP request on a connection is checked, not just the first;
+  connections that don't name their site are refused; the filter listens on ports chosen at
+  start-up (no other user can occupy them first), limits the connections it relays, closes idle
+  ones, and refuses web traffic instead of letting it through when it can't run.
+- Adding websites to a locked block can no longer push its earlier websites out of the hosts
+  file's subdomains or Chromium's 1,000-entry blocklist.
+- Changing the time zone no longer ends a running scheduled block early.
+- Firefox's encrypted DNS is only turned off while websites are blocked.
+- The service no longer writes through, or reads, links in folders that non-administrators can
+  change (macOS: Firefox's policy file in an app bundle a user owns).
+
 ## [0.1.0]
 
 First release, in beta.
