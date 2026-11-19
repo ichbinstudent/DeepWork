@@ -7,7 +7,7 @@ reporting and no ads, and it never sends anything about you anywhere.
 
 | What | Where | Who can read it |
 | --- | --- | --- |
-| Blocks (names, websites, apps, schedules, locks) and settings | Linux: `/var/lib/deepwork/state.json`; Windows: `C:\ProgramData\DeepWork\state\state.json` | Linux: root only. Windows: everyone signed in to the PC; only administrators can change it. |
+| Blocks (names, websites, apps, schedules, locks) and settings | Linux: `/var/lib/deepwork/state.json`; Windows: `C:\ProgramData\DeepWork\state\state.json` | root / administrators only |
 | Statistics: focus time per day, how often each blocked app was closed | the same file | the same |
 | Lock passwords | the same file, as salted hashes (never the password itself) | the same |
 | Who may control DeepWork (user ids or SIDs) | Linux: `/etc/deepwork/config.json`; Windows: `C:\ProgramData\DeepWork\config.json` | readable by all users |

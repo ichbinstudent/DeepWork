@@ -11,19 +11,26 @@ const PREFIXES: &[&str] = &[
     "", "www.", "m.", "mobile.", "old.", "new.", "web.", "app.", "en.", "de.", "touch.",
 ];
 
-/// Above this many domains (e.g. an imported list) only `www.` is added, to
-/// keep the hosts file a reasonable size.
+/// Only this many domains (e.g. of an imported list) get every prefix; the
+/// rest only `www.`, to keep the hosts file a reasonable size.
 const FULL_EXPANSION_LIMIT: usize = 2000;
 
-pub fn expand(domains: &BTreeSet<String>) -> BTreeSet<String> {
-    let prefixes = if domains.len() > FULL_EXPANSION_LIMIT {
-        &PREFIXES[..2]
-    } else {
-        PREFIXES
-    };
+/// The host names for `domains`, which come most important first (see
+/// [`crate::state::Plan::priority`]): the first [`FULL_EXPANSION_LIMIT`] get
+/// every common subdomain. Domains added later go to the back, so they can't
+/// take subdomains away from domains that were blocked already.
+pub fn expand(domains: &[String]) -> BTreeSet<String> {
     domains
         .iter()
-        .flat_map(|d| prefixes.iter().map(move |p| format!("{p}{d}")))
+        .enumerate()
+        .flat_map(|(i, d)| {
+            let prefixes = if i < FULL_EXPANSION_LIMIT {
+                PREFIXES
+            } else {
+                &PREFIXES[..2]
+            };
+            prefixes.iter().map(move |p| format!("{p}{d}"))
+        })
         .collect()
 }
 
@@ -48,9 +55,10 @@ pub fn strip(content: &str) -> String {
     s
 }
 
-/// The full hosts file with our section reflecting `domains` (expanded with
-/// common subdomains) and `exact` (added as-is).
-pub fn render(content: &str, domains: &BTreeSet<String>, exact: &BTreeSet<String>) -> String {
+/// The full hosts file with our section reflecting `domains` (most
+/// important first, expanded with common subdomains) and `exact` (added
+/// as-is).
+pub fn render(content: &str, domains: &[String], exact: &BTreeSet<String>) -> String {
     let mut s = strip(content);
     if domains.is_empty() && exact.is_empty() {
         return s;
@@ -76,20 +84,34 @@ mod tests {
 
     #[test]
     fn roundtrip() {
-        let d: BTreeSet<String> = ["reddit.com".to_string()].into();
+        let d = ["reddit.com".to_string()];
         let none = BTreeSet::new();
         let r = render(BASE, &d, &none);
         assert!(r.starts_with(BASE));
         assert!(r.contains("0.0.0.0 reddit.com\n"));
         assert!(r.contains(":: www.reddit.com\n"));
         assert_eq!(render(&r, &d, &none), r, "idempotent");
-        assert_eq!(render(&r, &BTreeSet::new(), &none), BASE);
+        assert_eq!(render(&r, &[], &none), BASE);
         assert_eq!(strip(&r), BASE);
+    }
+
+    /// Adding many domains never takes subdomains away from the domains
+    /// that come first.
+    #[test]
+    fn additions_dont_push_out_earlier_domains() {
+        let mut d = vec!["reddit.com".to_string()];
+        assert!(expand(&d).contains("old.reddit.com"));
+        d.extend((0..5000).map(|i| format!("a{i}.example")));
+        let all = expand(&d);
+        assert!(all.contains("old.reddit.com"));
+        assert!(all.contains("old.a0.example"));
+        assert!(!all.contains("old.a4999.example"));
+        assert!(all.contains("www.a4999.example") && all.contains("a4999.example"));
     }
 
     #[test]
     fn keeps_user_lines_after_section() {
-        let d: BTreeSet<String> = ["a.com".to_string()].into();
+        let d = ["a.com".to_string()];
         let none = BTreeSet::new();
         let r = render(BASE, &d, &none) + "10.0.0.1 nas\n";
         let again = render(&r, &d, &none);

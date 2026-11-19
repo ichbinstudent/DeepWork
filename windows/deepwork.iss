@@ -86,6 +86,8 @@ const
   ServiceName = 'DeepWork';
   EnvKey = 'SYSTEM\CurrentControlSet\Control\Session Manager\Environment';
   UninstallKey = 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{6F0E5B2A-6A8B-4D7E-9C59-2E3D1C4B7A10}_is1';
+  { Where the user who started the installer leaves a token (see OriginalUserSid). }
+  SetupKey = 'Software\DeepWork Setup';
 
 function Run(const Exe, Params: String): Integer;
 var
@@ -157,30 +159,43 @@ begin
 end;
 
 { The SID of the user who started the installer (before it asked for
-  administrator rights), or the one given with /USER=. }
+  administrator rights), or the one given with /USER=. That user writes a
+  random token into their own part of the registry (HKEY_CURRENT_USER),
+  which only they and administrators can change, and the part it turns up
+  in names them. (A file in a shared folder could be swapped by another
+  user before it is read.) }
 function OriginalUserSid: String;
 var
-  F, S: String;
-  Lines: TArrayOfString;
-  Code, P: Integer;
+  Token, Value: String;
+  Users: TArrayOfString;
+  Code, I: Integer;
 begin
   Result := ExpandConstant('{param:USER|}');
   if Result <> '' then
     Exit;
-  F := ExpandConstant('{%PUBLIC|C:\Users\Public}') + '\deepwork-setup-user.txt';
-  DeleteFile(F);
-  if ExecAsOriginalUser(ExpandConstant('{sys}\cmd.exe'), '/c whoami /user /fo csv /nh > "' + F + '"',
+  { Setup's own temporary folder has a random name nobody else can see. }
+  Token := GetSHA256OfString(ExpandConstant('{tmp}') + '|'
+    + GetDateTimeString('yyyymmddhhnnsszzz', #0, #0) + '|' + ExpandConstant('{computername}'));
+  if ExecAsOriginalUser(ExpandConstant('{sys}\reg.exe'),
+      'add "HKCU\' + SetupKey + '" /v Token /d ' + Token + ' /f',
       '', SW_HIDE, ewWaitUntilTerminated, Code)
-    and (Code = 0) and LoadStringsFromFile(F, Lines) and (GetArrayLength(Lines) > 0) then begin
-    { "pc\name","S-1-5-21-..." }
-    S := Lines[0];
-    P := Pos('"S-1-', S);
-    if P > 0 then begin
-      S := Copy(S, P + 1, Length(S));
-      Result := Copy(S, 1, Pos('"', S) - 1);
+    and (Code = 0) and RegGetSubkeyNames(HKU, '', Users) then begin
+    for I := 0 to GetArrayLength(Users) - 1 do begin
+      { Users' own hives, not their "_Classes" parts. }
+      if (Pos('S-1-', Users[I]) = 1) and (Pos('_', Users[I]) = 0)
+        and RegQueryStringValue(HKU, Users[I] + '\' + SetupKey, 'Token', Value)
+        and (Value = Token) then begin
+        if Result <> '' then begin
+          Log('the setup token turned up for more than one user');
+          Result := '';
+          Break;
+        end;
+        Result := Users[I];
+      end;
     end;
   end;
-  DeleteFile(F);
+  ExecAsOriginalUser(ExpandConstant('{sys}\reg.exe'), 'delete "HKCU\' + SetupKey + '" /f',
+    '', SW_HIDE, ewWaitUntilTerminated, Code);
   Log('original user: ' + Result);
 end;
 

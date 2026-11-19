@@ -38,12 +38,15 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
   servers are blocked by name and address for your apps. Browsers can't look up blocked sites
   around `/etc/hosts`. System services (e.g. systemd-resolved with DNS over TLS) are not affected.
 - **HTTPS filtering** (optional, Settings page): while websites are blocked, your web traffic goes
-  through a filter inside the service. It reads the site name of each connection (TLS SNI or HTTP
-  `Host`) and refuses blocked sites. Nothing is decrypted and no certificate is installed.
-  It works for any browser or app, including Flatpaks, custom DNS and direct IP addresses.
-  Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while filtering so
-  browsers fall back to filterable HTTPS.
-- **App blocking**: blocked apps are closed as soon as they start. You can match an app by process
+  through a filter inside the service. It reads the site name of each connection (TLS SNI, or the
+  `Host` of every plain-HTTP request) and refuses blocked sites. Nothing is decrypted and no
+  certificate is installed. It works for any browser or app, including Flatpaks, custom DNS and
+  direct IP addresses: connections that don't name their site (e.g. HTTPS to a bare IP address)
+  are refused. Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while
+  filtering so browsers fall back to filterable HTTPS. If the filter can't run, the traffic it
+  should check is refused, never let through.
+- **App blocking**: blocked apps are closed as soon as they start, for every person's account on
+  the computer (never root's or system services'). You can match an app by process
   name, executable path, or desktop/Flatpak app id. A picker lists installed and running apps.
   `cmd:<text>` rules match the full command line, e.g. `cmd:net.minecraft.client.main.Main` catches
   Minecraft whichever launcher started it.
@@ -104,8 +107,10 @@ Everything is undone the moment the block ends, including root's password if it 
 safety net, a systemd timer (`deepwork-hardcore-release.timer`) runs a small shell script that gives
 the rights back a minute after the deadline, even if the DeepWork service is broken.
 
-To make sure administrator rights always come back for updates, a hardcore session can last at
-most 7 days, and hardcore schedules must leave some time free every week. The block editor asks for
+To make sure administrator rights always come back for updates, hardcore blocks together can keep
+them away for at most 7 days in a row (breaks of less than an hour don't count); then they come
+back for at least an hour, while blocking goes on. Hardcore schedules must also leave some time
+free every week. The block editor asks for
 confirmation and warns if you're in a group such as `docker` that can still get root.
 
 ## Install
@@ -120,8 +125,9 @@ sudo apt install ./deepwork_<version>-1_amd64.deb      # Debian 13+, Ubuntu 25.0
 sudo dnf install ./deepwork-<version>-1.x86_64.rpm     # Fedora 42+
 ```
 
-The user who runs the install through `sudo` may control DeepWork; add others with
-`sudo deepwork-daemon --allow-user <uid>` and `sudo systemctl restart deepwork`. Removing the package
+The user who runs the install through `sudo` (or `pkexec`, `run0`, `doas`) may control DeepWork;
+add others with `sudo deepwork-daemon --allow-user <uid>` and `sudo systemctl restart deepwork`.
+Installed from a root shell, only root may control it until you add someone. Removing the package
 is refused while a block is locked; `apt purge` also deletes your blocks and statistics.
 
 On other distributions, download `deepwork-<version>-linux-x86_64.tar.gz`, unpack it and run the
@@ -156,7 +162,7 @@ cd deepwork
 
 Only the user who ran `install.sh` (and root) may control the service. To allow others, add their
 user ids (`id -u <name>`) to `allowed_users` in `/etc/deepwork/config.json` and run
-`sudo systemctl restart deepwork`.
+`sudo systemctl restart deepwork`. Without that file, or with nobody in it, only root may.
 
 This installs:
 
@@ -196,7 +202,8 @@ deepworkctl start Social 60
 
 The service (`DeepWork` in *Services*) runs as SYSTEM, starts with Windows and is restarted if it
 crashes or is killed. Blocks and settings live in `C:\ProgramData\DeepWork`, which only
-administrators can change; the service logs to `deepwork.log` there. Only the user who started the
+administrators can change (and only they can read the blocks and lock passwords); the service logs
+to `deepwork.log` there. Only the user who started the
 installer (and administrators) may control it. To let another user in, run in an administrator
 terminal `deepwork-daemon --allow-user <SID>` (their SID is in `whoami /user`) and restart the
 service. Locks only stop standard users: an administrator can always stop the service.
@@ -285,16 +292,20 @@ unless a hardcore block is running. Other limits:
 - VPN apps, proxies and Tor tunnel traffic past local blocking. Block those apps if needed.
 - With HTTPS filtering, a browser that uses Encrypted Client Hello hides the real site name. ECH
   needs encrypted DNS, which DeepWork blocks, so this is rare. Browsers can also reuse an existing
-  connection for a sibling domain on the same server (e.g. Google sites). Chrome's URL blocklist
-  still covers Chrome.
+  HTTPS connection for a sibling domain on the same server (e.g. Google sites), and a server that
+  hosts both an allowed and a blocked site may serve either over the same encrypted connection.
+  Chrome's URL blocklist still covers Chrome.
 - The firewall rules only exist while websites are blocked. They are removed when the service stops,
   so a crashed service never leaves your connection broken.
 - `/etc/hosts` has no wildcards. Each blocked site also covers common subdomains (`www.`, `m.`,
-  `old.`, …). Chromium-based browsers block all subdomains through policy.
+  `old.`, …), the first 2,000 sites fully and the rest with `www.` only. Chromium-based browsers
+  block all subdomains through policy, for up to 1,000 sites. Sites of locked blocks come first,
+  so adding sites to a locked block never takes coverage away from the ones it had.
 - Firefox reads policies only at start-up, so its URL filter takes effect after a restart. The
   hosts file works immediately.
-- App blocking only covers processes owned by regular users, and never core desktop or system
-  processes.
+- App blocking only covers processes of people's accounts (uid 1000 and up), never root, system
+  services or core desktop programs. A program can't escape by calling itself `bash`: only the
+  installed shells and desktop programs count as those.
 - Hardcore mode can't stop someone who boots a live USB stick or edits the kernel command line in
   the boot menu. Set a firmware (BIOS) password and a boot loader password to close that. Members
   of groups such as `docker` or `disk` can also still get root.

@@ -26,33 +26,108 @@ use crate::platform::Options;
 use crate::state::Daemon;
 
 /// Write a file atomically (temp file + rename) with the given Unix mode
-/// (ignored elsewhere). Symlinked targets are written in place so the link
-/// survives.
+/// (ignored elsewhere).
+///
+/// The service runs as root, so it never follows a link that somebody else
+/// could have put there: a symlinked target is written in place (keeping the
+/// link) only when its directory belongs to administrators, and is replaced
+/// otherwise. The temporary file is always created new, never opened through
+/// an existing link.
 pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
-    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) && admin_only(dir) {
         return fs::write(path, data);
     }
-    let dir = path.parent().unwrap_or(Path::new("."));
     let tmp = dir.join(format!(
         ".{}.deepwork-tmp",
         path.file_name().unwrap_or_default().to_string_lossy()
     ));
+    let _ = fs::remove_file(&tmp);
     {
         let mut opts = fs::OpenOptions::new();
-        opts.write(true).create(true).truncate(true);
+        opts.write(true).create_new(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, mode);
         let mut f = opts.open(&tmp)?;
         f.write_all(data)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            f.set_permissions(fs::Permissions::from_mode(mode))?;
+        }
+        #[cfg(not(unix))]
+        let _ = mode;
         f.sync_all()?;
     }
-    set_mode(&tmp, mode)?;
     fs::rename(&tmp, path).or_else(|e| {
         // Some files can't be replaced, only rewritten: a mount point (e.g.
         // /etc/hosts in containers), or a file another program holds open.
         let _ = fs::remove_file(&tmp);
-        fs::write(path, data).map_err(|_| e)
+        rewrite_in_place(path, data).map_err(|_| e)
     })
+}
+
+/// Overwrite an existing file without following a symlink at `path`.
+fn rewrite_in_place(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::custom_flags(&mut opts, libc::O_NOFOLLOW);
+    opts.open(path)?.write_all(data)
+}
+
+/// Read a file the service manages, following a symlink at `path` only when
+/// [`write_atomic`] would follow it too: a link elsewhere could point the
+/// service at any file on the system.
+pub fn read_managed(path: &Path) -> std::io::Result<String> {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink())
+        && !path.parent().is_some_and(admin_only)
+    {
+        return Err(std::io::Error::other(format!(
+            "{} is a link in a folder that non-administrators can change",
+            path.display()
+        )));
+    }
+    fs::read_to_string(path)
+}
+
+/// Whether only administrators can decide what `dir` is and what's in it:
+/// every folder looked at on the way there, through links too, belongs to
+/// root and nobody else may change it (on macOS, members of `admin` may: they
+/// can get root anyway). Folders that don't exist yet count as safe, since
+/// the service creates them. Elsewhere the service's own folders are made
+/// admin-only by the platform module, so this is assumed.
+pub fn admin_only(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let admin_gid = if cfg!(target_os = "macos") { 80 } else { 0 };
+        let safe = |d: &Path| {
+            fs::metadata(d).is_ok_and(|m| {
+                m.uid() == 0
+                    && m.mode() & 0o002 == 0
+                    && (m.mode() & 0o020 == 0 || m.gid() == 0 || m.gid() == admin_gid)
+            })
+        };
+        let Ok(dir) = std::path::absolute(dir) else {
+            return false;
+        };
+        let mut prefix = PathBuf::new();
+        for part in dir.components() {
+            prefix.push(part);
+            match fs::canonicalize(&prefix) {
+                Ok(real) if real.ancestors().all(safe) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => return true,
+                _ => return false,
+            }
+        }
+        true
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        true
+    }
 }
 
 /// Set Unix permissions (no-op on other systems).
@@ -73,32 +148,59 @@ pub fn set_mode(path: &Path, mode: u32) -> std::io::Result<()> {
 #[serde(default)]
 struct Config {
     /// Who may control the service besides administrators: Unix user ids,
-    /// or Windows SIDs. Empty = everyone.
+    /// or Windows SIDs.
     allowed_users: Vec<server::UserId>,
 }
 
-/// The users allowed to control the service (`None`: everyone). A config
-/// file that can't be read leaves only administrators in, never everyone.
-fn allowed_users(path: &Path) -> Option<Vec<server::UserId>> {
+/// The users allowed to control the service besides administrators. A
+/// config file that is missing, can't be read or lists nobody leaves only
+/// administrators in, never everyone.
+fn allowed_users(path: &Path) -> Vec<server::UserId> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return None,
         Err(e) => {
             eprintln!(
-                "deepwork: cannot read {} ({e}); only administrators may control DeepWork",
+                "deepwork: cannot read {} ({e}); only administrators may control DeepWork \
+                 (add users with deepwork-daemon --allow-user)",
                 path.display()
             );
-            return Some(vec![]);
+            return vec![];
         }
     };
     match serde_json::from_str::<Config>(&text) {
-        Ok(c) => (!c.allowed_users.is_empty()).then_some(c.allowed_users),
+        Ok(c) => {
+            if c.allowed_users.is_empty() {
+                eprintln!(
+                    "deepwork: {} lists no users; only administrators may control DeepWork",
+                    path.display()
+                );
+            }
+            c.allowed_users
+        }
         Err(e) => {
             eprintln!(
                 "deepwork: {} is invalid ({e}); only administrators may control DeepWork until it is fixed",
                 path.display()
             );
-            Some(vec![])
+            vec![]
+        }
+    }
+}
+
+/// Allow more open files than the usual 1024: the web filter needs two per
+/// connection it relays.
+#[cfg(unix)]
+fn raise_open_files_limit() {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: valid pointer to an rlimit.
+    unsafe {
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < limit.rlim_max
+        {
+            limit.rlim_cur = limit.rlim_max.min(65_536);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
         }
     }
 }
@@ -110,8 +212,9 @@ fn usage() -> ! {
          --sandbox DIR         keep all files under DIR and don't touch the system (for testing)\n  \
          --socket PATH         listen on PATH instead of the default socket\n  \
          --net                 manage the firewall and HTTPS filter even in the sandbox\n  \
-         --filter-uid-min N    only filter processes of users with uid >= N (default 1000)\n  \
-         --proxy-ports T,H     ports of the HTTPS and HTTP filter (default 41443,41080)\n  \
+         --filter-uid-min N    lowest uid of a person's account: only their processes are\n                        \
+       network-filtered or closed by app blocks (default 1000)\n  \
+         --proxy-ports T,H     ports of the HTTPS and HTTP filter (default: any free ports)\n  \
          --cleanup             remove blocks from the hosts file, browser policies and the firewall,\n                        \
        and give administrator rights back (hardcore mode), then exit\n  \
          --allow-user ID       let a user control DeepWork (a uid, or a SID on Windows), then exit"
@@ -182,7 +285,7 @@ fn run() {
         sandbox: false,
         force_net: false,
         filter_uid_min: 1000,
-        filter_ports: (41443, 41080),
+        filter_ports: (0, 0),
     };
     let mut config_path = defaults.config;
     let mut socket: Option<PathBuf> = None;
@@ -225,6 +328,19 @@ fn run() {
         }
     }
     let socket = socket.unwrap_or_else(|| DEFAULT_SOCKET.into());
+    // Windows: the data folder must belong to administrators before
+    // anything in it is trusted or written (any user may create folders in
+    // C:\ProgramData, so it might be theirs).
+    #[cfg(windows)]
+    if !opts.sandbox
+        && let Err(e) = platform::windows::prepare_data_dir(&opts.state_dir)
+    {
+        eprintln!(
+            "deepwork: cannot make {} safe: {e}",
+            opts.state_dir.parent().unwrap_or(&opts.state_dir).display()
+        );
+        std::process::exit(1);
+    }
     if let Some(id) = allow {
         match allow_user(&config_path, &id) {
             Ok(()) => println!("{id} may now control DeepWork (restart the service to apply)."),
@@ -241,6 +357,8 @@ fn run() {
         std::process::exit(1);
     }
     let _ = set_mode(&opts.state_dir, 0o700);
+    #[cfg(unix)]
+    raise_open_files_limit();
 
     let platform = platform::native(&opts);
     // The sandbox starts from a copy of the real hosts file.
@@ -268,7 +386,12 @@ fn run() {
         eprintln!("deepwork: {e}");
         std::process::exit(1);
     });
-    let allowed = allowed_users(&config_path);
+    // A sandbox without a config file is a developer's test: anyone may use it.
+    let allowed = if opts.sandbox && !config_path.exists() {
+        None
+    } else {
+        Some(allowed_users(&config_path))
+    };
 
     let caps = enforcer.capabilities();
     let daemon = Arc::new(Mutex::new(Daemon::new(
@@ -381,10 +504,62 @@ mod tests {
         } else {
             assert_eq!(list, &[serde_json::json!(1000), serde_json::json!(1001)]);
         }
-        assert_eq!(allowed_users(&path).map(|l| l.len()), Some(list.len()));
-        // A broken file lets only administrators in.
+        assert_eq!(allowed_users(&path).len(), list.len());
+        // A broken, empty or missing file lets only administrators in.
         fs::write(&path, "{ nope").unwrap();
-        assert_eq!(allowed_users(&path), Some(vec![]));
+        assert_eq!(allowed_users(&path), vec![]);
+        fs::write(&path, r#"{"allowed_users": []}"#).unwrap();
+        assert_eq!(allowed_users(&path), vec![]);
+        fs::write(&path, "{}").unwrap();
+        assert_eq!(allowed_users(&path), vec![]);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(allowed_users(&path), vec![]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn writes_never_follow_foreign_links() {
+        use std::os::unix::fs::symlink;
+        let dir = std::env::temp_dir().join(format!("dw-links-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        // The test's folder isn't root's, so links in it are not followed.
+        assert!(!admin_only(&dir));
+        let target = dir.join("target");
+        fs::write(&target, "precious").unwrap();
+
+        // A link at the file itself is replaced, the target left alone.
+        let file = dir.join("policies.json");
+        symlink(&target, &file).unwrap();
+        assert!(read_managed(&file).is_err());
+        write_atomic(&file, b"{}", 0o644).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "precious");
+        assert!(
+            !fs::symlink_metadata(&file)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(read_managed(&file).unwrap(), "{}");
+
+        // So is a link planted where the temporary file goes.
+        let tmp = dir.join(".policies.json.deepwork-tmp");
+        symlink(&target, &tmp).unwrap();
+        write_atomic(&file, b"[]", 0o644).unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "precious");
+        assert_eq!(fs::read_to_string(&file).unwrap(), "[]");
+        assert!(!tmp.exists());
+
+        // The in-place fallback doesn't follow links either.
+        symlink(&target, dir.join("link")).unwrap();
+        assert!(rewrite_in_place(&dir.join("link"), b"x").is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "precious");
+
+        // Root's own folders are trusted, also before they exist; /tmp is not.
+        assert!(admin_only(Path::new("/")));
+        assert!(admin_only(Path::new("/nonexistent-deepwork/x")));
+        assert!(!admin_only(Path::new("/tmp")));
         let _ = fs::remove_dir_all(&dir);
     }
 }
