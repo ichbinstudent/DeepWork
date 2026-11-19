@@ -79,6 +79,17 @@ fn connect(path: &str) -> Result<std::fs::File> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match std::fs::OpenOptions::new().access_mode(ACCESS).open(path) {
+            // Any program may create a pipe of that name while the service
+            // isn't running. The service's belongs to SYSTEM (or the
+            // administrators), which nobody else can pose as; anyone else
+            // doesn't get to see passwords.
+            Ok(f) if is_service_pipe(path) && !crate::windows::owned_by_admins(&f) => {
+                return Err(ClientError::Unavailable(
+                    "another program is posing as it. Restart the computer, and if that \
+                     doesn't help, ask an administrator to look for it."
+                        .into(),
+                ));
+            }
             Ok(f) => return Ok(f),
             Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) && Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(20))
@@ -86,6 +97,13 @@ fn connect(path: &str) -> Result<std::fs::File> {
             Err(e) => return Err(unreachable(e)),
         }
     }
+}
+
+/// Whether `path` names the service's own pipe (not one of a sandbox or a
+/// test, whose servers are ordinary programs).
+#[cfg(windows)]
+pub fn is_service_pipe(path: &str) -> bool {
+    path.eq_ignore_ascii_case(crate::protocol::DEFAULT_SOCKET)
 }
 
 impl Client {

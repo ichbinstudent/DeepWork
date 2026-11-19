@@ -65,7 +65,8 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
 - **Weekly schedule**: drag across a 7-day × 30-minute grid to choose when a block turns on.
 - **Locks**:
   - *Random text*: type N random characters to unlock (pasting is disabled)
-  - *Password*: somebody else keeps the password
+  - *Password*: somebody else keeps the password (after 5 wrong guesses, each next one has to
+    wait, up to 5 minutes)
   - *Until restart*: unlocks only after a reboot
   - *Strict*: no way out until the time is up
   - *Hardcore*: strict, and nobody gets administrator rights while it runs (see below)

@@ -272,6 +272,11 @@ pub struct BlockRuntime {
     pub unlocked_until: f64,
     /// Allowance break.
     pub pause_until: f64,
+    /// Where the pomodoro rhythm of the current window started: its start,
+    /// or when the rhythm last changed. Moving the window's start (more
+    /// schedule time, a time zone change) doesn't move the rhythm, so it
+    /// can't jump into a break. Ignored when it's before the window.
+    pub cycle_start: f64,
     /// Boot in which the current window was locked (restart lock).
     pub lock_boot_id: String,
     /// Boot in which the "protect until" date was set (restart lock).
@@ -716,6 +721,12 @@ impl Block {
             return None;
         }
         let (start, _) = self.window(now)?;
+        // A rhythm pinned earlier in this window wins over the window's start.
+        let start = if (start..=now).contains(&self.rt.cycle_start) {
+            self.rt.cycle_start
+        } else {
+            start
+        };
         let pos = (now - start).rem_euclid(every + length);
         Some(if pos < every {
             (false, every - pos)

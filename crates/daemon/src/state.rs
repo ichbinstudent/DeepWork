@@ -23,6 +23,13 @@ const MAX_EVENTS: usize = 200;
 const MAX_BLOCKS: usize = 500;
 /// How long an unlock lasts for a block that isn't running (protected only).
 const UNLOCK_GRACE: f64 = 15.0 * 60.0;
+/// Wrong passwords for a block in a row before the service makes everyone
+/// wait between guesses, from [`FIRST_GUESS_WAIT`] doubling up to
+/// [`MAX_GUESS_WAIT`] seconds. That leaves typos alone, but keeps someone
+/// who may use DeepWork from trying passwords until one fits.
+const FREE_GUESSES: u32 = 5;
+const FIRST_GUESS_WAIT: f64 = 5.0;
+const MAX_GUESS_WAIT: f64 = 300.0;
 
 fn check_protection(cfg: &BlockConfig, now: f64) -> R<()> {
     if cfg.protect_until > now && cfg.lock == LockKind::None {
@@ -85,6 +92,8 @@ pub struct Daemon {
     pub boot_id: String,
     pub dirty: bool,
     challenges: HashMap<String, String>,
+    /// Block id -> wrong passwords in a row, and when the next guess may come.
+    guesses: HashMap<String, (u32, f64)>,
     events: VecDeque<Event>,
     next_seq: u64,
     was_enforcing: HashSet<String>,
@@ -109,6 +118,7 @@ impl Daemon {
             boot_id,
             dirty: false,
             challenges: HashMap::new(),
+            guesses: HashMap::new(),
             events: VecDeque::new(),
             next_seq: 1,
             was_enforcing: HashSet::new(),
@@ -173,6 +183,7 @@ impl Daemon {
                 };
                 shift(&mut b.rt.session_until);
                 shift(&mut b.rt.session_start);
+                shift(&mut b.rt.cycle_start);
                 shift(&mut b.rt.pause_until);
                 shift(&mut b.rt.unlocked_until);
                 shift(&mut b.config.protect_until);
@@ -202,12 +213,7 @@ impl Daemon {
                 "Timers were adjusted so the clock change doesn't end any blocks early.".into(),
             );
         }
-        let zone = system_zone();
-        if let Some(old) = self.zone.replace(zone.clone())
-            && zones_differ(&old, &zone, now)
-        {
-            self.zone_changed(&old, now);
-        }
+        self.follow_zone(now);
 
         let boot = self.boot_id.clone();
         let mut plan = Plan::default();
@@ -216,19 +222,28 @@ impl Daemon {
         let mut hardcore_wanted: f64 = 0.0;
         let mut locked_sites = BTreeSet::new();
         for b in &mut self.p.blocks {
-            if b.in_window(now) {
+            if let Some((start, _)) = b.window(now) {
                 if b.rt.lock_boot_id.is_empty() {
                     b.rt.lock_boot_id = boot.clone();
+                    self.dirty = true;
+                }
+                if !(start..=now).contains(&b.rt.cycle_start) {
+                    b.rt.cycle_start = start;
                     self.dirty = true;
                 }
             } else {
                 // An unlock of a protected block outside its window runs on
                 // its own timer, so only clear it once it has expired.
                 let stale_unlock = b.rt.unlocked_until != 0.0 && b.rt.unlocked_until <= now;
-                if !b.rt.lock_boot_id.is_empty() || b.rt.session_until != 0.0 || stale_unlock {
+                if !b.rt.lock_boot_id.is_empty()
+                    || b.rt.session_until != 0.0
+                    || b.rt.cycle_start != 0.0
+                    || stale_unlock
+                {
                     b.rt.lock_boot_id.clear();
                     b.rt.session_until = 0.0;
                     b.rt.session_start = 0.0;
+                    b.rt.cycle_start = 0.0;
                     if stale_unlock {
                         b.rt.unlocked_until = 0.0;
                     }
@@ -436,6 +451,18 @@ impl Daemon {
         ))
     }
 
+    /// Notice a change of the system's time zone. Requests do this too, before
+    /// they look at any schedule: a lock check in the new zone must not come
+    /// before the running windows of the old one are kept.
+    fn follow_zone(&mut self, now: f64) {
+        let zone = system_zone();
+        if let Some(old) = self.zone.replace(zone.clone())
+            && zones_differ(&old, &zone, now)
+        {
+            self.zone_changed(&old, now);
+        }
+    }
+
     /// The system's time zone changed, which Windows lets every user do.
     /// Scheduled windows that were running in the old zone keep running, as
     /// sessions, for the time they had left, so the change can't end a block
@@ -446,7 +473,7 @@ impl Daemon {
             if let Some((start, end)) = b.sched_window_in(now, old)
                 && end > now
             {
-                if !b.session_active(now) {
+                if !b.session_active(now) || start < b.rt.session_start {
                     b.rt.session_start = start;
                 }
                 b.rt.session_until = b.rt.session_until.max(end);
@@ -519,6 +546,7 @@ impl Daemon {
     // ------------------------------------------------------------------ requests
 
     pub fn handle(&mut self, req: Request, now: f64) -> Response {
+        self.follow_zone(now);
         let mutating = !matches!(
             req,
             Request::Ping | Request::Status | Request::Events { .. } | Request::Stats { .. }
@@ -709,6 +737,20 @@ impl Daemon {
         if new.protect_until > now && new.protect_until != b.config.protect_until {
             b.rt.protect_boot_id = boot;
         }
+        // Breaks keep the rhythm they had, even if the window now starts
+        // earlier. A new rhythm starts now, with focus: picked up halfway, it
+        // could land straight in a break.
+        if let Some((start, _)) = b.window(now) {
+            let same = (b.config.break_every, b.config.break_length)
+                == (new.break_every, new.break_length);
+            b.rt.cycle_start = if !same {
+                now
+            } else if (start..=now).contains(&b.rt.cycle_start) {
+                b.rt.cycle_start
+            } else {
+                start
+            };
+        }
         b.config = new;
         Ok(())
     }
@@ -724,6 +766,7 @@ impl Daemon {
         }
         self.p.blocks.retain(|b| b.id != id);
         self.challenges.remove(id);
+        self.guesses.remove(id);
         Ok(())
     }
 
@@ -749,6 +792,9 @@ impl Daemon {
                 "“{}” has nothing to block yet. Add a website or an app first.",
                 b.config.name
             ));
+        }
+        if !b.in_window(now) {
+            b.rt.cycle_start = now;
         }
         if !b.session_active(now) {
             b.rt.session_start = now;
@@ -816,23 +862,54 @@ impl Daemon {
         if !b.locked(now, &boot) {
             return Ok(());
         }
-        let ok = match b.config.lock {
-            LockKind::Random => challenge.is_some_and(|c| !c.is_empty() && c == response),
-            LockKind::Password => verify_password(response, &b.password_hash),
+        match b.config.lock {
+            LockKind::Random => {
+                if !challenge.is_some_and(|c| !c.is_empty() && c == response) {
+                    return Err("The text doesn't match. Type it exactly as shown.".into());
+                }
+            }
+            LockKind::Password => {
+                let hash = b.password_hash.clone();
+                self.check_password(id, response, &hash, now)?;
+            }
             _ => return Err("This block can't be unlocked".into()),
-        };
-        if !ok {
-            return Err(match b.config.lock {
-                LockKind::Password => "Wrong password".into(),
-                _ => "The text doesn't match. Type it exactly as shown.".into(),
-            });
         }
         // Unlocked for the rest of the running window, and at least a few
         // minutes so a protected block that isn't running can be edited.
+        let b = self.block_mut(id)?;
         let window_end = b.window(now).map(|w| w.1).unwrap_or(now);
         b.rt.unlocked_until = window_end.max(now + UNLOCK_GRACE);
         self.challenges.remove(id);
         Ok(())
+    }
+
+    /// Check a block's password, making callers wait between guesses after
+    /// [`FREE_GUESSES`] wrong ones in a row.
+    fn check_password(&mut self, id: &str, response: &str, hash: &str, now: f64) -> R<()> {
+        let (wrong, next) = self.guesses.get(id).copied().unwrap_or_default();
+        if now < next {
+            return Err(format!(
+                "Too many wrong passwords. Try again in {}.",
+                seconds_text(next - now)
+            ));
+        }
+        if verify_password(response, hash) {
+            self.guesses.remove(id);
+            return Ok(());
+        }
+        let wrong = wrong + 1;
+        let wait = if wrong < FREE_GUESSES {
+            0.0
+        } else {
+            let doublings = (wrong - FREE_GUESSES).min(16) as i32;
+            (FIRST_GUESS_WAIT * 2f64.powi(doublings)).min(MAX_GUESS_WAIT)
+        };
+        self.guesses.insert(id.to_string(), (wrong, now + wait));
+        Err(if wait > 0.0 {
+            format!("Wrong password. Try again in {}.", seconds_text(wait))
+        } else {
+            "Wrong password".into()
+        })
     }
 
     fn take_break(&mut self, id: &str, minutes: u32, now: f64) -> R<f64> {
@@ -902,6 +979,19 @@ impl Daemon {
             "Your computer will stay locked until the timer ends.".into(),
         );
         Ok(())
+    }
+}
+
+/// "5 seconds", "1 minute", "5 minutes".
+fn seconds_text(secs: f64) -> String {
+    let secs = secs.ceil().max(1.0) as u64;
+    match secs {
+        1 => "1 second".into(),
+        2..60 => format!("{secs} seconds"),
+        _ => match secs.div_ceil(60) {
+            1 => "1 minute".into(),
+            m => format!("{m} minutes"),
+        },
     }
 }
 
