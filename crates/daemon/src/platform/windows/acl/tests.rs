@@ -1,5 +1,7 @@
 use super::*;
-use windows_sys::Win32::Security::Authorization::ConvertSecurityDescriptorToStringSecurityDescriptorW;
+use windows_sys::Win32::Security::Authorization::{
+    ConvertSecurityDescriptorToStringSecurityDescriptorW, GetSecurityInfo, SE_FILE_OBJECT,
+};
 
 fn sddl(path: &Path) -> String {
     let file = open(path, READ_CONTROL).unwrap();

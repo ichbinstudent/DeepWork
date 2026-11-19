@@ -18,15 +18,14 @@ use std::os::windows::io::AsRawHandle;
 use std::path::Path;
 use std::ptr::null_mut;
 
+use deepwork_core::windows::owned_by_admins;
 use windows_sys::Win32::Foundation::{HANDLE, LocalFree};
 use windows_sys::Win32::Security::Authorization::{
-    ConvertStringSecurityDescriptorToSecurityDescriptorW, GetSecurityInfo, SDDL_REVISION_1,
-    SE_FILE_OBJECT,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
-    DACL_SECURITY_INFORMATION, IsWellKnownSid, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
-    PSID, SECURITY_ATTRIBUTES, SetKernelObjectSecurity, WinBuiltinAdministratorsSid,
-    WinLocalSystemSid,
+    DACL_SECURITY_INFORMATION, OWNER_SECURITY_INFORMATION, PSECURITY_DESCRIPTOR,
+    SECURITY_ATTRIBUTES, SetKernelObjectSecurity,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     BY_HANDLE_FILE_INFORMATION, CreateDirectoryW, FILE_ATTRIBUTE_DIRECTORY,
@@ -109,33 +108,6 @@ fn info(file: &fs::File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
             return Err(io::Error::last_os_error());
         }
         Ok(info)
-    }
-}
-
-/// Whether administrators or SYSTEM own the object.
-fn owned_by_admins(file: &fs::File) -> bool {
-    let mut owner: PSID = null_mut();
-    let mut sd: PSECURITY_DESCRIPTOR = null_mut();
-    // SAFETY: valid handle and out pointers; the descriptor is freed below
-    // and `owner` points into it.
-    unsafe {
-        let err = GetSecurityInfo(
-            file.as_raw_handle() as HANDLE,
-            SE_FILE_OBJECT,
-            OWNER_SECURITY_INFORMATION,
-            &mut owner,
-            null_mut(),
-            null_mut(),
-            null_mut(),
-            &mut sd,
-        );
-        if err != 0 {
-            return false;
-        }
-        let ok = IsWellKnownSid(owner, WinBuiltinAdministratorsSid) != 0
-            || IsWellKnownSid(owner, WinLocalSystemSid) != 0;
-        LocalFree(sd);
-        ok
     }
 }
 

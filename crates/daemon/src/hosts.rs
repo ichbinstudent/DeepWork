@@ -34,6 +34,25 @@ pub fn expand(domains: &[String]) -> BTreeSet<String> {
         .collect()
 }
 
+/// The hosts file's bytes as text, one character per byte (Latin-1), so
+/// that [`to_bytes`] gives back exactly the same bytes, whatever the
+/// encoding. Our own lines are ASCII.
+pub fn from_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+/// The inverse of [`from_bytes`].
+pub fn to_bytes(text: &str) -> Vec<u8> {
+    text.chars()
+        .map(|c| u8::try_from(c).unwrap_or(b'?'))
+        .collect()
+}
+
+/// Whether the file has our section.
+pub fn has_section(content: &str) -> bool {
+    content.lines().any(|l| l.trim_end() == BEGIN)
+}
+
 /// Remove our section from an existing hosts file.
 pub fn strip(content: &str) -> String {
     let mut out = Vec::new();

@@ -55,12 +55,14 @@ pub fn chromium_policy(domains: &[String]) -> Value {
     })
 }
 
-/// Merge our settings into an existing Firefox `policies.json` value.
-/// `original` is the file as it was before DeepWork touched it. Without
-/// domains it is the original again: encrypted DNS is only turned off while
-/// websites are blocked.
-pub fn firefox_policy(original: &Value, domains: &[String]) -> Value {
-    let mut root = original.as_object().cloned().unwrap_or_default();
+/// Firefox's `policies.json` value with our settings merged into `current`,
+/// the file as it is now. Only `DNSOverHTTPS` and `WebsiteFilter` are ours,
+/// built on what `original` (the file before DeepWork touched it) had there.
+/// Without domains they are `original`'s again: encrypted DNS is only turned
+/// off while websites are blocked. Everything else stays as it is in
+/// `current`, so policies that change during a block are kept.
+pub fn firefox_policy(current: &Value, original: &Value, domains: &[String]) -> Value {
+    let mut root = current.as_object().cloned().unwrap_or_default();
     let mut policies = root
         .get("policies")
         .and_then(Value::as_object)
@@ -177,38 +179,59 @@ impl Policies {
             );
             return Ok(());
         }
+        let current = read_policies(&file)?;
         let backup = self.firefox_backup();
         if !backup.exists() {
             // Remember what was there before (or that nothing was).
-            let original = crate::read_managed(&file).unwrap_or_else(|_| "null".into());
+            let original = match &current {
+                Some((text, _)) => text.clone(),
+                None => "null".into(),
+            };
             crate::write_atomic(&backup, original.as_bytes(), 0o600)?;
         }
         let original: Value =
             serde_json::from_str(&fs::read_to_string(&backup)?).unwrap_or(Value::Null);
-        let new = serde_json::to_string_pretty(&firefox_policy(&original, domains))?;
-        if crate::read_managed(&file).ok().as_deref() != Some(new.as_str()) {
+        let current = current.map_or(Value::Null, |(_, v)| v);
+        let new = firefox_policy(&current, &original, domains);
+        if new != current {
             fs::create_dir_all(dir)?;
-            crate::write_atomic(&file, new.as_bytes(), 0o644)?;
+            crate::write_atomic(&file, serde_json::to_string_pretty(&new)?.as_bytes(), 0o644)?;
         }
         Ok(())
     }
 
-    /// Put Firefox's `policies.json` back the way it was before DeepWork, so
-    /// nothing of ours (such as encrypted DNS being off) stays while no
-    /// websites are blocked.
+    /// Take our settings out of Firefox's `policies.json` again, so nothing
+    /// of ours (such as encrypted DNS being off) stays while no websites are
+    /// blocked. What others changed in the meantime stays.
     fn restore_firefox(&self, policy: &str) -> std::io::Result<()> {
         let backup = self.firefox_backup();
         let Ok(orig) = fs::read_to_string(&backup) else {
             return Ok(());
         };
+        let original: Value = serde_json::from_str(&orig).unwrap_or(Value::Null);
         let file = self.path(policy);
-        if orig.trim() == "null" {
-            match fs::remove_file(&file) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(e),
-                _ => {}
+        let current = match read_policies(&file) {
+            // Someone is editing it: try again next time.
+            Err(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                eprintln!("deepwork: {e}");
+                return Ok(());
             }
-        } else {
-            crate::write_atomic(&file, orig.as_bytes(), 0o644)?;
+            other => other?,
+        };
+        if let Some((_, current)) = current {
+            let restored = firefox_policy(&current, &original, &[]);
+            if restored == original {
+                // Exactly as before, formatting included.
+                crate::write_atomic(&file, orig.as_bytes(), 0o644)?;
+            } else if original.is_null() && restored == json!({ "policies": {} }) {
+                fs::remove_file(&file)?;
+            } else if restored != current {
+                crate::write_atomic(
+                    &file,
+                    serde_json::to_string_pretty(&restored)?.as_bytes(),
+                    0o644,
+                )?;
+            }
         }
         fs::remove_file(backup)
     }
@@ -225,6 +248,27 @@ impl Policies {
             self.restore_firefox(policy)?;
         }
         Ok(())
+    }
+}
+
+/// Firefox's `policies.json` as text and value, `None` if there is none. A
+/// file that isn't valid JSON is an error: it's left alone rather than
+/// replaced.
+fn read_policies(file: &Path) -> std::io::Result<Option<(String, Value)>> {
+    let text = match crate::read_managed(file) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    match serde_json::from_str(&text) {
+        Ok(v) => Ok(Some((text, v))),
+        Err(e) => Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!(
+                "{} isn't valid JSON ({e}); leaving it alone",
+                file.display()
+            ),
+        )),
     }
 }
 

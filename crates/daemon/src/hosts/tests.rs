@@ -38,3 +38,24 @@ fn keeps_user_lines_after_section() {
     assert!(again.contains("10.0.0.1 nas"));
     assert_eq!(again.matches(BEGIN).count(), 1);
 }
+
+/// A hosts file that isn't UTF-8 keeps every byte, and so does one that is.
+#[test]
+fn keeps_every_byte() {
+    let d = ["a.com".to_string()];
+    let none = BTreeSet::new();
+    for original in [
+        &b"127.0.0.1 localhost\n10.0.0.2 caf\xe9 # Latin-1\n"[..],
+        "127.0.0.1 localhost\n10.0.0.3 nas # Grüße\n".as_bytes(),
+    ] {
+        let text = from_bytes(original);
+        assert!(!has_section(&text));
+        let blocked = to_bytes(&render(&text, &d, &none));
+        assert!(blocked.starts_with(original));
+        assert!(has_section(&from_bytes(&blocked)));
+        assert_eq!(
+            to_bytes(&render(&from_bytes(&blocked), &[], &none)),
+            original
+        );
+    }
+}
