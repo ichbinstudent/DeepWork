@@ -1175,3 +1175,173 @@ fn stopping_scheduled_block_skips_window() {
     assert!(d.tick(T + 1.0, 1.0, 1.0).domains.is_empty());
     assert!(!d.tick(T + DAY + 1.0, 1.0, 1.0).domains.is_empty());
 }
+
+/// A request right after a time zone change, before the next tick, sees
+/// the window that was running too: it can't delete or turn off the block.
+#[test]
+fn time_zone_change_is_noticed_by_requests() {
+    use deepwork_core::model::{fixed_zone, utc_offset};
+    let east = fixed_zone(utc_offset(&system_zone(), T) + 5 * 3600);
+    let m = deepwork_core::model::minute_of_week_in(T, &east) as u32;
+    assert!(m >= 60 && m + 60 <= WEEK_MINUTES);
+    let cfg = BlockConfig {
+        schedule: vec![[m - 60, m + 60]],
+        schedule_enabled: true,
+        lock: LockKind::Strict,
+        ..sites()
+    };
+    let (mut d, id) = daemon_with(cfg, None);
+    d.zone = Some(east);
+    let mut off = d.p.blocks[0].config.clone();
+    off.schedule_enabled = false;
+    let r = d.handle(
+        Request::UpdateBlock {
+            id: id.clone(),
+            config: off,
+            password: None,
+        },
+        T,
+    );
+    assert!(!r.ok, "the schedule can't be turned off");
+    assert!(!d.handle(Request::DeleteBlock { id }, T).ok, "nor deleted");
+    assert!(d.tick(T + 1.0, 1.0, 1.0).domains.contains("reddit.com"));
+}
+
+fn pomodoro_block(cfg: BlockConfig) -> BlockConfig {
+    BlockConfig {
+        break_every: 25,
+        break_length: 5,
+        lock: LockKind::Strict,
+        ..cfg
+    }
+}
+
+/// Fewer or shorter breaks are allowed while locked. The new rhythm starts
+/// with focus, instead of counting from the window's start, where minute 33
+/// of 30 + 5 would be a break.
+#[test]
+fn a_new_break_rhythm_starts_with_focus() {
+    let (mut d, id) = daemon_with(pomodoro_block(sites()), None);
+    assert!(
+        d.handle(
+            Request::StartBlock {
+                id: id.clone(),
+                minutes: 120
+            },
+            T
+        )
+        .ok
+    );
+    d.tick(T + 1.0, 1.0, 1.0);
+    let t = T + 33.0 * 60.0;
+    d.tick(t, 1.0, 1.0);
+    assert!(d.p.blocks[0].enforcing(t));
+    for (every, length) in [(30, 5), (30, 1)] {
+        let mut cfg = d.p.blocks[0].config.clone();
+        (cfg.break_every, cfg.break_length) = (every, length);
+        let r = d.handle(
+            Request::UpdateBlock {
+                id: id.clone(),
+                config: cfg,
+                password: None,
+            },
+            t,
+        );
+        assert!(r.ok, "{:?}", r.error);
+        assert_eq!(
+            d.p.blocks[0].pomodoro(t + 60.0),
+            Some((false, (every as f64 - 1.0) * 60.0))
+        );
+        d.tick(t + 60.0, 1.0, 1.0);
+        assert!(d.p.blocks[0].enforcing(t + 60.0));
+    }
+}
+
+/// Adding schedule time before a running window (allowed while locked)
+/// moves the window's start, but not the rhythm of its breaks.
+#[test]
+fn earlier_schedule_time_keeps_the_break_rhythm() {
+    let m = deepwork_core::model::minute_of_week(T) as u32;
+    assert!(m >= 60 && m + 60 <= WEEK_MINUTES);
+    // 33 minutes into the window: focus.
+    let cfg = pomodoro_block(BlockConfig {
+        schedule: vec![[m - 33, m + 60]],
+        schedule_enabled: true,
+        ..sites()
+    });
+    for tick_first in [true, false] {
+        let (mut d, id) = daemon_with(cfg.clone(), None);
+        if tick_first {
+            d.tick(T, 1.0, 1.0);
+        }
+        assert!(d.p.blocks[0].enforcing(T));
+        // 25 more minutes before it: the window has run for 58 minutes, which
+        // counted from its new start would be a break.
+        let mut earlier = cfg.clone();
+        earlier.schedule = vec![[m - 58, m + 60]];
+        let r = d.handle(
+            Request::UpdateBlock {
+                id,
+                config: earlier,
+                password: None,
+            },
+            T,
+        );
+        assert!(r.ok, "{:?}", r.error);
+        d.tick(T + 1.0, 1.0, 1.0);
+        assert!(d.p.blocks[0].enforcing(T + 1.0), "tick first: {tick_first}");
+    }
+}
+
+/// Wrong passwords: a few are free, then everyone waits longer and longer
+/// between guesses, up to five minutes.
+#[test]
+fn guessing_passwords_gets_slow() {
+    let (password, wrong) = test_password();
+    let cfg = BlockConfig {
+        lock: LockKind::Password,
+        ..sites()
+    };
+    let (mut d, id) = daemon_with(cfg, Some(&password));
+    let start = Request::StartBlock {
+        id: id.clone(),
+        minutes: 600,
+    };
+    assert!(d.handle(start, T).ok);
+    let unlock = |d: &mut Daemon, response: &str, t: f64| {
+        d.handle(
+            Request::Unlock {
+                id: id.clone(),
+                response: response.into(),
+            },
+            t,
+        )
+        .error
+        .unwrap_or_default()
+    };
+    for _ in 0..4 {
+        assert_eq!(unlock(&mut d, &wrong, T), "Wrong password");
+    }
+    assert_eq!(
+        unlock(&mut d, &wrong, T),
+        "Wrong password. Try again in 5 seconds."
+    );
+    assert_eq!(
+        unlock(&mut d, &password, T + 4.0),
+        "Too many wrong passwords. Try again in 1 second.",
+        "not even the right one"
+    );
+    assert_eq!(
+        unlock(&mut d, &wrong, T + 5.0),
+        "Wrong password. Try again in 10 seconds."
+    );
+    // Many guesses later, the wait stops growing.
+    d.guesses.insert(id.clone(), (40, 0.0));
+    assert_eq!(
+        unlock(&mut d, &wrong, T + 15.0),
+        "Wrong password. Try again in 5 minutes."
+    );
+    // After the wait the right password works, and the count starts over.
+    assert_eq!(unlock(&mut d, &password, T + 315.0), "");
+    assert!(d.guesses.is_empty());
+}

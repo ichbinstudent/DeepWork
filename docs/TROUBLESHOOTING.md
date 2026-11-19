@@ -24,6 +24,13 @@ Only the user who installed DeepWork and administrators may control it.
 If `config.json` is missing, broken or lists nobody, only administrators may control DeepWork
 until it's fixed; the log says so.
 
+## "Another program is posing as it" (Windows)
+
+A program took the name of the service's connection (`\\.\pipe\deepwork`) while the service
+wasn't running, so the app won't talk to it: it could be after your block passwords. Blocks are
+still enforced. Restarting the computer ends that program; the log says when the service has its
+name back. If it happens again, an administrator should find out which program it is.
+
 ## A site is still reachable
 
 - Reload the page. Pages that were already open lose their connection when a block starts but

@@ -36,6 +36,20 @@ Fixes for problems found by code scanning:
 - Firefox's encrypted DNS is only turned off while websites are blocked.
 - The service no longer writes through, or reads, links in folders that non-administrators can
   change (macOS: Firefox's policy file in an app bundle a user owns).
+- Windows: the app and `deepworkctl` only talk to the service's own pipe. A program that took its
+  name while the service wasn't running no longer gets block passwords, and the service keeps
+  enforcing blocks instead of failing to start.
+- Changing the time zone and then, before the service noticed, deleting a scheduled block or
+  turning its schedule off no longer gets around its lock.
+- Changing the breaks of a locked block (or adding schedule time before a running window) no
+  longer jumps straight into a break: a new break rhythm starts with focus.
+- After 5 wrong passwords in a row for a block, everyone has to wait between guesses, from 5
+  seconds doubling up to 5 minutes.
+- A hosts file that can't be read is left alone, and one that isn't UTF-8 keeps its bytes; the
+  service no longer touches the hosts file at all when it has nothing to add or remove.
+- Firefox policies that are changed during a block are kept when it ends (only the website
+  filter and encrypted DNS settings are DeepWork's while it runs), and a `policies.json` that
+  isn't valid JSON is left alone.
 
 ## [0.1.0]
 

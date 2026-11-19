@@ -6,6 +6,8 @@ pub mod lists;
 pub mod model;
 pub mod procinfo;
 pub mod protocol;
+#[cfg(windows)]
+pub mod windows;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

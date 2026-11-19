@@ -190,17 +190,26 @@ impl Enforcer {
         }
     }
 
-    /// Returns whether the file was rewritten.
+    /// Returns whether the file was rewritten. A file that can't be read is
+    /// left alone, and one that isn't UTF-8 keeps its bytes.
     fn sync_hosts(&self, domains: &[String], exact: &BTreeSet<String>) -> std::io::Result<bool> {
         let Some(path) = &self.hosts_path else {
             return Ok(false);
         };
-        let current = fs::read_to_string(path).unwrap_or_default();
+        let current = match fs::read(path) {
+            Ok(bytes) => hosts::from_bytes(&bytes),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+            Err(e) => return Err(e),
+        };
+        // Nothing of ours to add or take out: don't touch the file at all.
+        if domains.is_empty() && exact.is_empty() && !hosts::has_section(&current) {
+            return Ok(false);
+        }
         let wanted = hosts::render(&current, domains, exact);
         if wanted == current {
             return Ok(false);
         }
-        crate::write_atomic(path, wanted.as_bytes(), 0o644)?;
+        crate::write_atomic(path, &hosts::to_bytes(&wanted), 0o644)?;
         Ok(true)
     }
 

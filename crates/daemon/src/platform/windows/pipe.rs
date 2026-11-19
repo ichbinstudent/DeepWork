@@ -9,6 +9,7 @@ use std::path::Path;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
     ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
@@ -31,6 +32,9 @@ use windows_sys::Win32::System::Pipes::{
 use windows_sys::Win32::System::Threading::{
     OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
 };
+
+use deepwork_core::client::is_service_pipe;
+use deepwork_core::windows::owned_by_admins;
 
 use crate::server::{Caller, Slot, UserId, handle_conn, permitted};
 use crate::state::Daemon;
@@ -106,6 +110,7 @@ pub fn serve(
     };
 
     let mut first = true;
+    let mut squatted = false;
     loop {
         // The first instance must be ours: fail if someone else holds the name.
         let open_mode = PIPE_ACCESS_DUPLEX
@@ -128,7 +133,27 @@ pub fn serve(
             )
         };
         if h == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
+            let err = io::Error::last_os_error();
+            // Another program took the service's name while it wasn't
+            // running. Clients won't talk to it (see `Client`), and blocks
+            // keep being enforced meanwhile; the name is ours once it's gone.
+            if first && is_service_pipe(&path.to_string_lossy()) && !held_by_admins(path) {
+                if !squatted {
+                    eprintln!(
+                        "deepwork: another program holds {}, so the app can't reach the \
+                         service until that program ends",
+                        path.display()
+                    );
+                    squatted = true;
+                }
+                std::thread::sleep(Duration::from_secs(5));
+                continue;
+            }
+            return Err(err);
+        }
+        if squatted {
+            eprintln!("deepwork: {} is the service's again", path.display());
+            squatted = false;
         }
         first = false;
         // SAFETY: `h` is a fresh handle that we own from here on.
@@ -162,6 +187,20 @@ pub fn serve(
             });
         }
     }
+}
+
+/// Whether the existing pipe at `path` is that of another copy of the
+/// service (or something else of the administrators'). Their pipes let
+/// SYSTEM and administrators in; one that doesn't, or that belongs to
+/// someone else, isn't theirs.
+fn held_by_admins(path: &Path) -> bool {
+    use std::os::windows::fs::OpenOptionsExt;
+    // READ_CONTROL: enough to see the owner, without writing to the pipe.
+    const READ_CONTROL: u32 = 0x0002_0000;
+    std::fs::OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .open(path)
+        .is_ok_and(|f| owned_by_admins(&f))
 }
 
 /// The caller: an administrator for SYSTEM and elevated administrators,
