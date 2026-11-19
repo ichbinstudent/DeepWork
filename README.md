@@ -340,6 +340,10 @@ The CI workflow (`.github/workflows/ci.yml`) runs the format check, Clippy and t
 Linux container and on Windows, builds the Windows installers for x64 and ARM64, and tests them
 end to end (install, block, update, uninstall) on Windows runners of both kinds.
 
+Unit tests go in a `tests.rs` next to the code they test (`#[cfg(test)] mod tests;`), not inline.
+CodeQL (`.github/workflows/codeql.yml`) skips those files, so test passwords and the like don't
+show up as security findings.
+
 ## License
 
 DeepWork is free software, licensed under the [GNU General Public License v3.0 or later](LICENSE).
