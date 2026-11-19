@@ -4,22 +4,25 @@
 //! which find the original destination with `SO_ORIGINAL_DST`. The site name
 //! is read by [`crate::webfilter`]. Nothing is decrypted. Blocked
 //! connections are closed (HTTPS) or answered with a small block page
-//! (HTTP); everything else is connected to the original destination and
-//! relayed. Plain HTTP is checked request by request.
+//! (HTTP); everything else is connected and relayed. Plain HTTP is checked
+//! request by request, and goes to the original destination. HTTPS goes
+//! where its site name leads: the name is all the filter sees, so an
+//! allowed name sent to a blocked site's address reaches the allowed site.
 //!
 //! The filter fails closed: a connection that doesn't name its site (TLS
 //! without SNI, e.g. to a bare IP address), a request it can't read, and
 //! connections beyond its limit are refused, never passed on unchecked.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{
-    Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream,
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener,
+    TcpStream, ToSocketAddrs,
 };
 use std::os::unix::io::AsRawFd;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, RwLock, mpsc};
+use std::sync::{Arc, Mutex, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
@@ -37,6 +40,10 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How often a waiting relay checks whether its connection went idle.
 const POLL: Duration = Duration::from_secs(30);
+/// How long the addresses of a site name are reused.
+const NAME_TTL: Duration = Duration::from_secs(60);
+/// Site names remembered at most; past that the list starts over.
+const NAMES_MAX: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -52,7 +59,11 @@ struct Shared {
     /// Connections being handled, and how many may be.
     active: AtomicUsize,
     max: usize,
+    names: Mutex<HashMap<String, Lookup>>,
 }
+
+/// When a site name was looked up, and its addresses.
+type Lookup = (Instant, Arc<[IpAddr]>);
 
 impl Shared {
     fn blocked(&self) -> Arc<HashSet<String>> {
@@ -131,6 +142,7 @@ impl Proxy {
                 .collect(),
             active: AtomicUsize::new(0),
             max: max_connections(),
+            names: Mutex::new(HashMap::new()),
         });
         for (l, kind) in listeners {
             spawn_acceptor(l, kind, shared.clone());
@@ -248,11 +260,15 @@ fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
             let (head, host) = read_client_hello(&mut hello)?;
             // Without a site name the filter can't tell which site this is.
             let blocked = shared.blocked();
-            if !host.is_some_and(|h| !is_blocked(&h, &blocked)) {
+            let Some(host) = host.filter(|h| !is_blocked(h, &blocked)) else {
                 refuse(&client, shared, None);
                 return Ok(());
-            }
-            let upstream = connect_marked(dst)?;
+            };
+            let Some(target) = upstream(dst, &addresses(shared, &host, dst.port())) else {
+                refuse(&client, shared, None);
+                return Ok(());
+            };
+            let upstream = connect_marked(target)?;
             (&upstream).write_all(&head)?;
             relay(client, upstream, None, shared);
         }
@@ -285,6 +301,46 @@ fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The addresses `host` has (looked up again after [`NAME_TTL`]).
+fn addresses(shared: &Shared, host: &str, port: u16) -> Arc<[IpAddr]> {
+    let names = || shared.names.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, ips)) = names().get(host)
+        && at.elapsed() < NAME_TTL
+    {
+        return ips.clone();
+    }
+    let ips: Arc<[IpAddr]> = (host, port)
+        .to_socket_addrs()
+        .map(|addrs| {
+            addrs
+                .map(|a| a.ip().to_canonical())
+                .filter(|ip| !ip.is_unspecified())
+                .collect()
+        })
+        .unwrap_or_default();
+    if !ips.is_empty() {
+        let mut names = names();
+        if names.len() >= NAMES_MAX {
+            names.clear();
+        }
+        names.insert(host.to_string(), (Instant::now(), ips.clone()));
+    }
+    ips
+}
+
+/// Where an HTTPS connection for a site with addresses `ips` goes: where the
+/// client sent it if that is one of them, otherwise to one of them (of the
+/// same IP version if it has one). None: the name has no address.
+fn upstream(dst: SocketAddr, ips: &[IpAddr]) -> Option<SocketAddr> {
+    if ips.contains(&dst.ip().to_canonical()) {
+        return Some(dst);
+    }
+    ips.iter()
+        .find(|ip| ip.is_ipv4() == dst.is_ipv4())
+        .or(ips.first())
+        .map(|ip| SocketAddr::new(*ip, dst.port()))
 }
 
 /// When either direction of a connection last carried data.

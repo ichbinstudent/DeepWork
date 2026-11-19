@@ -2,9 +2,11 @@
 //! rights, so nobody can stop the service, edit `/etc/hosts` or flush the
 //! firewall.
 //!
-//! - sudo: a sudoers drop-in that sorts last denies every command to
-//!   everyone but root (the last matching rule wins).
-//! - doas: a `deny` section at the end of `/etc/doas.conf`, if it exists.
+//! - sudo: a section at the very end of `/etc/sudoers`, after everything it
+//!   includes, denies every command to everyone but root (the last matching
+//!   rule wins, so no other file or rule can come after it).
+//! - doas: a `deny` section at the end of `/etc/doas.conf`, if it exists,
+//!   for everyone its `permit` rules let in.
 //! - polkit (pkexec, run0, systemctl, GNOME Software…): administrator
 //!   authentication needs root's password, and the dangerous actions are
 //!   refused outright, even where a distribution allows them for admins.
@@ -24,11 +26,13 @@ use std::time::{Duration, Instant};
 use crate::platform::AdminLockout;
 use crate::write_atomic;
 
+/// The sudoers drop-in of earlier releases (removed when found).
 const SUDOERS_NAME: &str = "zz-deepwork-hardcore";
 const POLKIT_NAME: &str = "00-deepwork-hardcore.rules";
 const UNIT: &str = "deepwork-hardcore-release";
-const DOAS_BEGIN: &str = "# BEGIN deepwork hardcore";
-const DOAS_END: &str = "# END deepwork hardcore";
+/// Lines around the section in `/etc/sudoers` and `/etc/doas.conf`.
+const BEGIN: &str = "# BEGIN deepwork hardcore";
+const END: &str = "# END deepwork hardcore";
 /// The safety net waits this long after the end, so the service normally
 /// gets there first.
 const RELEASE_GRACE: f64 = 60.0;
@@ -61,6 +65,7 @@ impl Paths {
         }
     }
 
+    /// Where earlier releases put their rule.
     fn sudoers_file(&self) -> PathBuf {
         self.sudoers_d.join(SUDOERS_NAME)
     }
@@ -161,12 +166,14 @@ impl Hardcore {
                 eprintln!("deepwork: cannot remove {}: {e}", f.display());
             }
         }
-        if let Ok(text) = fs::read_to_string(&p.doas) {
-            let cleaned = strip_section(&text);
-            if cleaned != text
-                && let Err(e) = write_atomic(&p.doas, cleaned.as_bytes(), 0o600)
-            {
-                eprintln!("deepwork: cannot update {}: {e}", p.doas.display());
+        for (file, mode) in [(&p.sudoers, 0o440), (&p.doas, 0o600)] {
+            if let Ok(text) = fs::read_to_string(file) {
+                let cleaned = strip_section(&text);
+                if cleaned != text
+                    && let Err(e) = write_atomic(file, cleaned.as_bytes(), mode)
+                {
+                    eprintln!("deepwork: cannot update {}: {e}", file.display());
+                }
             }
         }
         if p.root_marker.exists() {
@@ -196,42 +203,30 @@ impl Hardcore {
         self.warnings.clear();
     }
 
+    /// Puts the rule at the very end of `/etc/sudoers`: what it includes
+    /// (`/etc/sudoers.d` and others) is read where the include stands, so
+    /// nothing can come after the rule, and the last matching rule wins.
     fn lock_sudo(&self) -> Result<(), String> {
         let p = &self.paths;
-        if !p.sudoers.exists() && !p.sudoers_d.exists() {
+        let Ok(text) = fs::read_to_string(&p.sudoers) else {
             return Ok(()); // sudo isn't installed
-        }
-        if !p.sudoers_d.is_dir() {
-            return Err(format!("{} is missing", p.sudoers_d.display()));
-        }
-        if let Ok(main) = fs::read_to_string(&p.sudoers)
-            && !main.lines().any(|l| {
-                let l = l.trim_start();
-                (l.starts_with("#includedir") || l.starts_with("@includedir"))
-                    && l.contains("sudoers.d")
-            })
-        {
-            return Err(format!(
-                "{} doesn't include {}",
-                p.sudoers.display(),
-                p.sudoers_d.display()
-            ));
-        }
-        let file = p.sudoers_file();
-        if fs::read_to_string(&file).is_ok_and(|c| c == SUDOERS) {
+        };
+        let wanted = with_section(&text, SUDOERS);
+        if wanted == text {
             return Ok(());
         }
         if self.system {
-            // Never install a file that would break sudo's parser.
-            let check = p.script.with_file_name("sudoers.check");
-            write_atomic(&check, SUDOERS.as_bytes(), 0o440).map_err(|e| e.to_string())?;
+            // Never install a file that would break sudo's parser. Checked
+            // next to the real one, so relative includes find the same files.
+            let check = p.sudoers.with_file_name("sudoers.deepwork-check");
+            write_atomic(&check, wanted.as_bytes(), 0o440).map_err(|e| e.to_string())?;
             let ok = run("visudo", &["-cqf", &check.to_string_lossy()]);
             let _ = fs::remove_file(&check);
             if let Err(e) = ok {
                 return Err(format!("the rule was rejected by visudo: {e}"));
             }
         }
-        write_atomic(&file, SUDOERS.as_bytes(), 0o440).map_err(|e| e.to_string())
+        write_atomic(&p.sudoers, wanted.as_bytes(), 0o440).map_err(|e| e.to_string())
     }
 
     fn lock_doas(&self) -> Result<(), String> {
@@ -239,8 +234,10 @@ impl Hardcore {
         let Ok(text) = fs::read_to_string(&p.doas) else {
             return Ok(()); // doas isn't set up
         };
-        let users = regular_users(&p.passwd);
-        let wanted = format!("{}{}", strip_section(&text), doas_section(&users));
+        let mut who = vec![":wheel".to_string()];
+        who.extend(doas_permitted(&strip_section(&text)));
+        who.extend(regular_users(&p.passwd));
+        let wanted = with_section(&text, &doas_section(&who));
         if wanted == text {
             return Ok(());
         }
@@ -319,7 +316,8 @@ impl Hardcore {
 
 const SUDOERS: &str = "\
 # Written by DeepWork while a hardcore block runs, and removed when it ends.
-# Until then nobody but root may use sudo: the last matching rule wins.
+# Until then nobody but root may use sudo: the last matching rule wins, so
+# this must stay the last line.
 ALL, !root ALL=(ALL:ALL) !ALL
 ";
 
@@ -393,41 +391,143 @@ fn release_script(p: &Paths, deadline: i64) -> String {
          # DeepWork hardcore mode safety net: gives administrator rights back\n\
          # after the deadline in case the DeepWork service couldn't.\n\
          [ \"$(date +%s)\" -ge {deadline} ] || exit 0\n\
-         rm -f {sudoers} {polkit}\n\
-         if [ -f {doas} ]; then sed -i '/^{begin}$/,/^{end}$/d' {doas}; fi\n\
+         rm -f {sudoers_d} {polkit}\n\
+         for f in {sudoers} {doas}; do\n\
+         \x20   if [ -f \"$f\" ]; then sed -i '/^{begin}$/,/^{end}$/d' \"$f\"; fi\n\
+         done\n\
          if [ -e {marker} ]; then usermod -U root && rm -f {marker}; fi\n\
          systemctl disable --now {UNIT}.timer\n",
-        sudoers = q(p.sudoers_file()),
+        sudoers_d = q(p.sudoers_file()),
+        sudoers = q(p.sudoers.clone()),
         polkit = q(p.polkit_file()),
         doas = q(p.doas.clone()),
         marker = q(p.root_marker.clone()),
-        begin = DOAS_BEGIN,
-        end = DOAS_END,
+        begin = BEGIN,
+        end = END,
     )
 }
 
-fn doas_section(users: &[String]) -> String {
-    let mut s = format!("{DOAS_BEGIN}\n");
-    s.push_str("# Nobody may use doas until DeepWork's hardcore block ends.\n");
-    s.push_str("deny :wheel\n");
-    for u in users {
-        s.push_str(&format!("deny {u}\n"));
+/// `deny` rules for these users and `:groups` (each once).
+fn doas_section(who: &[String]) -> String {
+    let mut s = String::from("# Nobody may use doas until DeepWork's hardcore block ends.\n");
+    let mut seen = std::collections::HashSet::new();
+    for w in who.iter().filter(|w| seen.insert(*w)) {
+        s.push_str(&format!("deny {w}\n"));
     }
-    s.push_str(&format!("{DOAS_END}\n"));
     s
 }
 
+/// Whom the `permit` rules of a doas.conf let in: users, and groups as
+/// `:group`. doas lets in nobody else, so denying all of them after those
+/// rules (the last matching rule wins) leaves doas to no one. Root is left
+/// out; it doesn't need doas.
+fn doas_permitted(conf: &str) -> Vec<String> {
+    let mut who = vec![];
+    for rule in doas_rules(conf) {
+        let mut words = rule.iter().map(String::as_str);
+        if words.next() != Some("permit") {
+            continue;
+        }
+        // Options come first: nopass, nolog, persist, keepenv, setenv { … }.
+        let mut braces = false;
+        let ident = words.find(|w| match *w {
+            "{" => {
+                braces = true;
+                false
+            }
+            "}" => {
+                braces = false;
+                false
+            }
+            _ if braces => false,
+            "nopass" | "nolog" | "persist" | "keepenv" | "setenv" => false,
+            _ => true,
+        });
+        let Some(ident) = ident else { continue };
+        let plain = ident
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._-:$@".contains(c));
+        if plain && !["root", "0"].contains(&ident) {
+            who.push(ident.to_string());
+        }
+    }
+    who
+}
+
+/// The rules of a doas.conf, one list of words each, the way doas reads
+/// them: `#` starts a comment, a backslash joins lines, `"…"` quotes, and
+/// `{` and `}` are words of their own.
+fn doas_rules(conf: &str) -> Vec<Vec<String>> {
+    let mut rules = vec![];
+    let mut rule: Vec<String> = vec![];
+    let mut word: Option<String> = None;
+    let (mut quoted, mut comment) = (false, false);
+    let mut chars = conf.chars();
+    while let Some(c) = chars.next() {
+        if comment {
+            if c != '\n' {
+                continue;
+            }
+            comment = false;
+        }
+        match c {
+            '\\' => match chars.next() {
+                Some('\n') | None => {}
+                Some(next) => word.get_or_insert_default().push(next),
+            },
+            '"' => {
+                quoted = !quoted;
+                word.get_or_insert_default();
+            }
+            _ if quoted && c != '\n' => word.get_or_insert_default().push(c),
+            '#' => comment = true,
+            '{' | '}' | ' ' | '\t' | '\n' => {
+                rule.extend(word.take());
+                if c == '{' || c == '}' {
+                    rule.push(c.to_string());
+                }
+                if c == '\n' {
+                    quoted = false;
+                    if !rule.is_empty() {
+                        rules.push(std::mem::take(&mut rule));
+                    }
+                }
+            }
+            _ => word.get_or_insert_default().push(c),
+        }
+        if comment {
+            rule.extend(word.take());
+        }
+    }
+    rule.extend(word);
+    if !rule.is_empty() {
+        rules.push(rule);
+    }
+    rules
+}
+
+/// `text` with `body` as its section at the end, in place of any it had.
+fn with_section(text: &str, body: &str) -> String {
+    let mut out = strip_section(text);
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&format!("{BEGIN}\n{body}{END}\n"));
+    out
+}
+
+/// `text` without the section, otherwise unchanged.
 fn strip_section(text: &str) -> String {
     let mut out = String::new();
     let mut inside = false;
-    for line in text.lines() {
-        if line == DOAS_BEGIN {
+    for line in text.split_inclusive('\n') {
+        let bare = line.trim_end_matches(['\n', '\r']);
+        if bare == BEGIN {
             inside = true;
-        } else if line == DOAS_END {
+        } else if bare == END {
             inside = false;
         } else if !inside {
             out.push_str(line);
-            out.push('\n');
         }
     }
     out

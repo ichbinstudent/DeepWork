@@ -772,6 +772,38 @@ fn websites_of_locked_blocks_come_first() {
     assert!(d.p.lock_order.is_empty());
 }
 
+/// A block protected until a date is locked while it isn't running too, so
+/// websites added then (or right after it was made) still go behind the
+/// ones it had once it runs.
+#[test]
+fn websites_of_protected_blocks_keep_their_place() {
+    let (mut d, id) = daemon_with(
+        BlockConfig {
+            lock: LockKind::Strict,
+            protect_until: T + 7.0 * DAY,
+            ..sites()
+        },
+        None,
+    );
+    let mut cfg = d.p.blocks[0].config.clone();
+    cfg.websites
+        .extend((0..3000).map(|i| format!("a{i:04}.earlier")));
+    let update = Request::UpdateBlock {
+        id: id.clone(),
+        config: cfg,
+        password: None,
+    };
+    assert!(d.handle(update, T).ok);
+    d.tick(T + 1.0, 1.0, 1.0);
+    assert!(d.p.lock_order.contains_key("reddit.com"));
+
+    let start = Request::StartBlock { id, minutes: 60 };
+    assert!(d.handle(start, T + DAY).ok);
+    let plan = d.tick(T + DAY, 1.0, 1.0);
+    assert_eq!(plan.priority[0], "reddit.com");
+    assert!(plan.priority[1].ends_with(".earlier"));
+}
+
 #[test]
 fn empty_block_cannot_start() {
     let (mut d, id) = daemon_with(BlockConfig::default(), None);

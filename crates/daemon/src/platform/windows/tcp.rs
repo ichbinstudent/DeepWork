@@ -22,13 +22,16 @@ use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
 
-/// Close every TCP connection to one of `ips`.
+/// Close every TCP connection to a website (port 443 or 80) at one of
+/// `ips`. Connections coming in (Remote Desktop, file sharing) stay up
+/// whatever address a website is given.
 pub fn cut(ips: &[IpAddr]) {
     let targets: HashSet<IpAddr> = ips.iter().map(|ip| ip.to_canonical()).collect();
     if targets.is_empty() {
         return;
     }
-    let (closed, error) = cut_where(|remote| targets.contains(&remote.ip()));
+    let (closed, error) =
+        cut_where(|remote| matches!(remote.port(), 443 | 80) && targets.contains(&remote.ip()));
     if let Some(e) = error {
         eprintln!("deepwork: cannot close some connections (error {e})");
     }
