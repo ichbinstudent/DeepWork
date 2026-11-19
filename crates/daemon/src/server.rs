@@ -32,7 +32,9 @@ pub enum Caller {
 }
 
 /// Whether `caller` may control the service. Administrators always may;
-/// `allowed = None` lets everyone in.
+/// `allowed = None` lets everyone in (only for a sandbox without a config
+/// file; a missing config file on a real system leaves only administrators
+/// in).
 pub fn permitted(caller: Option<&Caller>, allowed: Option<&[UserId]>) -> bool {
     match (caller, allowed) {
         (None, _) => false,

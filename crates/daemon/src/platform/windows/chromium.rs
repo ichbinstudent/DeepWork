@@ -6,9 +6,10 @@
 //! it.
 //!
 //! Whatever was there before is saved on first use and restored when no
-//! websites are blocked any more; existing blocklist entries are kept.
+//! websites are blocked any more; existing blocklist entries are kept, and
+//! keys DeepWork created are only removed when nothing else was put in them.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::PathBuf;
@@ -21,7 +22,7 @@ use windows_sys::Win32::System::GroupPolicy::{RP_FORCE, RefreshPolicyEx};
 use windows_sys::Win32::System::Registry::{
     HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_64KEY, KEY_WRITE, REG_DWORD,
     REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW, RegDeleteKeyExW, RegDeleteTreeW,
-    RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    RegDeleteValueW, RegOpenKeyExW, RegQueryInfoKeyW, RegQueryValueExW, RegSetValueExW,
 };
 
 use crate::browser::{PolicyStore, chromium_policy};
@@ -75,7 +76,7 @@ struct Backup {
 }
 
 impl PolicyStore for RegistryPolicies {
-    fn apply(&self, domains: &BTreeSet<String>) -> io::Result<()> {
+    fn apply(&self, domains: &[String]) -> io::Result<()> {
         let result = self.write(domains);
         if let Hive::Machine = self.hive {
             announce_policy_change();
@@ -94,7 +95,7 @@ fn announce_policy_change() {
 }
 
 impl RegistryPolicies {
-    fn write(&self, domains: &BTreeSet<String>) -> io::Result<()> {
+    fn write(&self, domains: &[String]) -> io::Result<()> {
         if domains.is_empty() {
             return self.restore();
         }
@@ -126,7 +127,7 @@ impl RegistryPolicies {
                                 list.push(s.to_string());
                             }
                         }
-                        list.truncate(1000);
+                        list.truncate(crate::browser::CHROMIUM_MAX_ENTRIES);
                         key.write_list(name, &list)?;
                     }
                     _ => {}
@@ -190,10 +191,14 @@ impl RegistryPolicies {
                 }
             }
         }
-        // Children first; a key that has gained other subkeys stays.
+        // Children first. A key that something else (an administrator, other
+        // software) has put values or keys into since stays, with them.
         for p in b.created.iter().rev() {
-            // SAFETY: valid NUL-terminated path.
-            unsafe { RegDeleteKeyExW(self.hive.hkey(), wide(p).as_ptr(), KEY_WOW64_64KEY, 0) };
+            let empty = Key::open(self.hive.hkey(), p, false).is_some_and(|k| k.is_empty());
+            if empty {
+                // SAFETY: valid NUL-terminated path.
+                unsafe { RegDeleteKeyExW(self.hive.hkey(), wide(p).as_ptr(), KEY_WOW64_64KEY, 0) };
+            }
         }
         fs::remove_file(&self.backup)
     }
@@ -247,6 +252,29 @@ impl Key {
             )
         })?;
         Ok(Key(h))
+    }
+
+    /// Whether the key has no values and no subkeys.
+    fn is_empty(&self) -> bool {
+        let (mut subkeys, mut values) = (0u32, 0u32);
+        // SAFETY: valid key and out pointers; everything else is optional.
+        let code = unsafe {
+            RegQueryInfoKeyW(
+                self.0,
+                null_mut(),
+                null_mut(),
+                null(),
+                &mut subkeys,
+                null_mut(),
+                null_mut(),
+                &mut values,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        };
+        code == ERROR_SUCCESS && subkeys == 0 && values == 0
     }
 
     /// A string or DWORD value.
@@ -368,7 +396,7 @@ mod tests {
         }
     }
 
-    fn domains(d: &[&str]) -> BTreeSet<String> {
+    fn domains(d: &[&str]) -> Vec<String> {
         d.iter().map(|s| s.to_string()).collect()
     }
 
@@ -399,7 +427,7 @@ mod tests {
             key.read_list("URLBlocklist").unwrap(),
             ["example.net", "youtube.com"]
         );
-        s.apply(&BTreeSet::new()).unwrap();
+        s.apply(&[]).unwrap();
         assert_eq!(
             key.get("DnsOverHttpsMode"),
             Some(Saved::Sz("automatic".into()))
@@ -414,8 +442,28 @@ mod tests {
         let s = store(&root2, &dir);
         s.apply(&domains(&["reddit.com"])).unwrap();
         assert!(Key::open(hkcu, &format!(r"{root2}\Google\Chrome"), false).is_some());
-        s.apply(&BTreeSet::new()).unwrap();
+        s.apply(&[]).unwrap();
         assert!(Key::open(hkcu, &root2, false).is_none());
+
+        // Policies somebody else set meanwhile stay where they are.
+        s.apply(&domains(&["reddit.com"])).unwrap();
+        let chrome2 = format!(r"{root2}\Google\Chrome");
+        Key::open(hkcu, &chrome2, true)
+            .unwrap()
+            .set_sz("HomepageLocation", "https://example.org")
+            .unwrap();
+        s.apply(&[]).unwrap();
+        let kept = Key::open(hkcu, &chrome2, false).expect("key with foreign values kept");
+        assert_eq!(
+            kept.get("HomepageLocation"),
+            Some(Saved::Sz("https://example.org".into()))
+        );
+        assert_eq!(kept.get("DnsOverHttpsMode"), None);
+        assert!(kept.read_list("URLBlocklist").is_none());
+        drop(kept);
+        // SAFETY: valid path.
+        unsafe { RegDeleteTreeW(hkcu, wide(&root2).as_ptr()) };
+        unsafe { RegDeleteKeyExW(hkcu, wide(&root2).as_ptr(), KEY_WOW64_64KEY, 0) };
 
         // SAFETY: valid path.
         unsafe { RegDeleteTreeW(hkcu, wide(&root).as_ptr()) };

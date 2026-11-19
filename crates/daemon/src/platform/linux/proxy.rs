@@ -5,26 +5,38 @@
 //! is read by [`crate::webfilter`]. Nothing is decrypted. Blocked
 //! connections are closed (HTTPS) or answered with a small block page
 //! (HTTP); everything else is connected to the original destination and
-//! relayed unchanged.
+//! relayed. Plain HTTP is checked request by request.
+//!
+//! The filter fails closed: a connection that doesn't name its site (TLS
+//! without SNI, e.g. to a bare IP address), a request it can't read, and
+//! connections beyond its limit are refused, never passed on unchecked.
 
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{
     Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener, TcpStream,
 };
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock, mpsc};
+use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
-use crate::webfilter::{block_page, is_blocked, read_client_hello, read_http_head};
+use super::netfilter::FilterPorts;
+use crate::webfilter::{HttpGate, Stop, block_page, is_blocked, read_client_hello};
 
 /// Mark set on the proxy's own outgoing connections so the firewall never
 /// redirects them back to the proxy.
 pub const MARK: u32 = 0x4457;
+
+/// Time a client gets to say which site it wants.
+const HANDSHAKE: Duration = Duration::from_secs(10);
+/// A connection with no traffic either way for this long is closed.
+const IDLE: Duration = Duration::from_secs(10 * 60);
+/// How often a waiting relay checks whether its connection went idle.
+const POLL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -35,31 +47,100 @@ enum Kind {
 struct Shared {
     blocked: RwLock<Arc<HashSet<String>>>,
     refused: AtomicU64,
-    ports: (u16, u16),
+    /// Our own listening ports (connections to them aren't relayed).
+    ports: Vec<u16>,
+    /// Connections being handled, and how many may be.
+    active: AtomicUsize,
+    max: usize,
+}
+
+impl Shared {
+    fn blocked(&self) -> Arc<HashSet<String>> {
+        self.blocked
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
 }
 
 #[derive(Clone)]
 pub struct Proxy {
     shared: Arc<Shared>,
+    ports: FilterPorts,
+}
+
+/// Whether binding failed because this system has no IPv6 loopback.
+fn no_ipv6(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::AddrNotAvailable || e.raw_os_error() == Some(libc::EAFNOSUPPORT)
+}
+
+/// How many connections may be relayed at once: each takes two open files
+/// and two threads. Leaves room for the service's other files.
+fn max_connections() -> usize {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: valid pointer to an rlimit.
+    let files = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } == 0 {
+        usize::try_from(limit.rlim_cur).unwrap_or(usize::MAX)
+    } else {
+        1024
+    };
+    (files.saturating_sub(256) / 2).clamp(32, 4096)
 }
 
 impl Proxy {
-    /// Bind the listeners on 127.0.0.1 and ::1 and start accepting.
+    /// Bind the listeners on 127.0.0.1 and ::1 and start accepting. Port 0
+    /// (the default) takes any free port, so no other user can occupy the
+    /// filter's ports beforehand.
     pub fn start(tls_port: u16, http_port: u16) -> io::Result<Proxy> {
+        let mut listeners = vec![];
+        let mut v4 = [0u16; 2];
+        let mut v6 = Some([0u16; 2]);
+        for (i, (port, kind)) in [(tls_port, Kind::Tls), (http_port, Kind::Http)]
+            .into_iter()
+            .enumerate()
+        {
+            let l = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
+            v4[i] = l.local_addr()?.port();
+            listeners.push((l, kind));
+            match TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
+                Ok(l) => {
+                    if let Some(v6) = &mut v6 {
+                        v6[i] = l.local_addr()?.port();
+                    }
+                    listeners.push((l, kind));
+                }
+                // No IPv6 here: the firewall refuses IPv6 web traffic instead.
+                Err(e) if no_ipv6(&e) => v6 = None,
+                Err(e) => return Err(e),
+            }
+        }
+        let ports = FilterPorts {
+            v4: (v4[0], v4[1]),
+            v6: v6.map(|p| (p[0], p[1])),
+        };
         let shared = Arc::new(Shared {
             blocked: RwLock::new(Arc::new(HashSet::new())),
             refused: AtomicU64::new(0),
-            ports: (tls_port, http_port),
+            ports: listeners
+                .iter()
+                .filter_map(|(l, _)| l.local_addr().ok())
+                .map(|a| a.port())
+                .collect(),
+            active: AtomicUsize::new(0),
+            max: max_connections(),
         });
-        for (port, kind) in [(tls_port, Kind::Tls), (http_port, Kind::Http)] {
-            let v4 = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
-            spawn_acceptor(v4, kind, shared.clone());
-            // IPv6 may be disabled; that's fine.
-            if let Ok(v6) = TcpListener::bind((Ipv6Addr::LOCALHOST, port)) {
-                spawn_acceptor(v6, kind, shared.clone());
-            }
+        for (l, kind) in listeners {
+            spawn_acceptor(l, kind, shared.clone());
         }
-        Ok(Proxy { shared })
+        Ok(Proxy { shared, ports })
+    }
+
+    /// Where the filter listens, for the firewall's redirect.
+    pub fn ports(&self) -> FilterPorts {
+        self.ports
     }
 
     pub fn set_blocked(&self, domains: HashSet<String>) {
@@ -75,66 +156,293 @@ impl Proxy {
     }
 }
 
+/// One of the [`Shared::max`] connections; freed when dropped.
+struct Slot(Arc<Shared>);
+
+impl Slot {
+    fn take(shared: &Arc<Shared>) -> Option<Slot> {
+        if shared.active.fetch_add(1, Ordering::SeqCst) >= shared.max {
+            shared.active.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Slot(shared.clone()))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 fn spawn_acceptor(listener: TcpListener, kind: Kind, shared: Arc<Shared>) {
     std::thread::spawn(move || {
+        let mut warned = false;
         for conn in listener.incoming() {
-            let Ok(conn) = conn else { continue };
-            let shared = shared.clone();
+            let Ok(conn) = conn else {
+                // Out of files or memory: don't spin.
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            };
+            // Over the limit, the connection is closed: refused, not let through.
+            let Some(slot) = Slot::take(&shared) else {
+                if !warned {
+                    eprintln!(
+                        "deepwork: web filter busy ({} connections), refusing new ones",
+                        shared.max
+                    );
+                    warned = true;
+                }
+                continue;
+            };
+            warned = false;
             let _ = std::thread::Builder::new()
                 .stack_size(256 * 1024)
                 .spawn(move || {
+                    let shared = slot.0.clone();
                     let _ = handle(conn, kind, &shared);
+                    drop(slot);
                 });
         }
     });
 }
 
-fn handle(mut client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
-    client.set_read_timeout(Some(Duration::from_secs(10)))?;
+/// Reads from a socket until `until`, then fails.
+struct Deadline<'a> {
+    socket: &'a TcpStream,
+    until: Instant,
+}
+
+impl Read for Deadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let left = self
+            .until
+            .checked_duration_since(Instant::now())
+            .filter(|d| !d.is_zero())
+            .ok_or(io::ErrorKind::TimedOut)?;
+        self.socket.set_read_timeout(Some(left))?;
+        (&*self.socket).read(buf)
+    }
+}
+
+fn refuse(client: &TcpStream, shared: &Shared, page: Option<&str>) {
+    shared.refused.fetch_add(1, Ordering::Relaxed);
+    if let Some(host) = page {
+        let _ = (&*client).write_all(block_page(host).as_bytes());
+    }
+    let _ = client.shutdown(Shutdown::Both);
+}
+
+fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
     client.set_nodelay(true).ok();
     let dst = original_dst(&client)?;
-    if dst.ip().is_loopback() && (dst.port() == shared.ports.0 || dst.port() == shared.ports.1) {
+    if dst.ip().is_loopback() && shared.ports.contains(&dst.port()) {
         return Ok(()); // someone connected to the proxy directly
     }
-    let (head, host) = match kind {
-        Kind::Tls => read_client_hello(&mut client)?,
-        Kind::Http => read_http_head(&mut client)?,
+    let mut hello = Deadline {
+        socket: &client,
+        until: Instant::now() + HANDSHAKE,
     };
-    let blocked = shared
-        .blocked
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .clone();
-    if let Some(host) = host.as_deref().filter(|h| is_blocked(h, &blocked)) {
-        shared.refused.fetch_add(1, Ordering::Relaxed);
-        if kind == Kind::Http {
-            let _ = client.write_all(block_page(host).as_bytes());
+    match kind {
+        Kind::Tls => {
+            let (head, host) = read_client_hello(&mut hello)?;
+            // Without a site name the filter can't tell which site this is.
+            let blocked = shared.blocked();
+            if !host.is_some_and(|h| !is_blocked(&h, &blocked)) {
+                refuse(&client, shared, None);
+                return Ok(());
+            }
+            let upstream = connect_marked(dst)?;
+            (&upstream).write_all(&head)?;
+            relay(client, upstream, None, shared);
         }
-        let _ = client.shutdown(Shutdown::Both);
-        return Ok(());
+        Kind::Http => {
+            // The first request decides before anything is connected, so a
+            // blocked site gets a block page instead.
+            let mut gate = HttpGate::default();
+            let mut out = vec![];
+            let mut buf = [0u8; 4096];
+            while !gate.started() {
+                let n = hello.read(&mut buf)?;
+                if n == 0 {
+                    return Ok(());
+                }
+                match gate.feed(&buf[..n], &shared.blocked(), &mut out) {
+                    Ok(()) => {}
+                    Err(Stop::Blocked(host)) => {
+                        refuse(&client, shared, Some(&host));
+                        return Ok(());
+                    }
+                    Err(Stop::Invalid) => {
+                        refuse(&client, shared, None);
+                        return Ok(());
+                    }
+                }
+            }
+            let upstream = connect_marked(dst)?;
+            (&upstream).write_all(&out)?;
+            relay(client, upstream, Some(gate), shared);
+        }
     }
-
-    let mut upstream = connect_marked(dst)?;
-    upstream.write_all(&head)?;
-    client.set_read_timeout(None)?;
-    relay(client, upstream);
     Ok(())
 }
 
-fn relay(client: TcpStream, upstream: TcpStream) {
-    let (Ok(mut c2), Ok(mut u2)) = (client.try_clone(), upstream.try_clone()) else {
+/// When either direction of a connection last carried data.
+struct Activity {
+    start: Instant,
+    last_ms: AtomicU64,
+}
+
+impl Activity {
+    fn touch(&self) {
+        let ms = self.start.elapsed().as_millis() as u64;
+        self.last_ms.store(ms, Ordering::Relaxed);
+    }
+
+    fn idle(&self) -> bool {
+        let ms = self.start.elapsed().as_millis() as u64;
+        ms.saturating_sub(self.last_ms.load(Ordering::Relaxed)) > IDLE.as_millis() as u64
+    }
+}
+
+/// Read some bytes, waking up now and then to see whether the whole
+/// connection has gone idle. `Ok(0)`: the other side is done.
+fn read_some(from: &TcpStream, buf: &mut [u8], activity: &Activity) -> io::Result<usize> {
+    loop {
+        match (&*from).read(buf) {
+            Ok(n) => {
+                activity.touch();
+                return Ok(n);
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
+                ) =>
+            {
+                if activity.idle() {
+                    return Err(io::ErrorKind::TimedOut.into());
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+/// Copy `from` to `to`. With `upgrade`, report whether the first answer
+/// is `101 Switching Protocols`.
+fn pump(
+    from: &TcpStream,
+    to: &TcpStream,
+    activity: &Activity,
+    mut upgrade: Option<mpsc::Sender<bool>>,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut first = Vec::new();
+    loop {
+        let n = read_some(from, &mut buf, activity)?;
+        if n == 0 {
+            return Ok(());
+        }
+        if let Some(tx) = &upgrade {
+            first.extend_from_slice(&buf[..n.min(16)]);
+            if first.len() >= 12 {
+                let _ = tx
+                    .send(first.starts_with(b"HTTP/1.1 101") || first.starts_with(b"HTTP/1.0 101"));
+                upgrade = None;
+            }
+        }
+        (&*to).write_all(&buf[..n])?;
+    }
+}
+
+/// Copy the client's requests to the server through the gate.
+fn pump_http(
+    client: &TcpStream,
+    upstream: &TcpStream,
+    activity: &Activity,
+    gate: &mut HttpGate,
+    upgrade: Option<mpsc::Receiver<bool>>,
+    shared: &Shared,
+) -> io::Result<()> {
+    let mut buf = vec![0u8; 16 * 1024];
+    let mut out = Vec::new();
+    loop {
+        out.clear();
+        let result = if gate.awaiting_upgrade() {
+            let switched = upgrade
+                .as_ref()
+                .and_then(|rx| rx.recv_timeout(IDLE).ok())
+                .ok_or(io::ErrorKind::TimedOut)?;
+            gate.upgrade_answered(switched, &shared.blocked(), &mut out)
+        } else {
+            let n = read_some(client, &mut buf, activity)?;
+            if n == 0 {
+                return Ok(());
+            }
+            gate.feed(&buf[..n], &shared.blocked(), &mut out)
+        };
+        (&*upstream).write_all(&out)?;
+        if let Err(stop) = result {
+            // The client retries on a new connection, where it gets the
+            // block page.
+            if let Stop::Blocked(_) = stop {
+                shared.refused.fetch_add(1, Ordering::Relaxed);
+            }
+            return Err(io::ErrorKind::PermissionDenied.into());
+        }
+    }
+}
+
+fn relay(client: TcpStream, upstream: TcpStream, gate: Option<HttpGate>, shared: &Shared) {
+    for s in [&client, &upstream] {
+        let _ = s.set_read_timeout(Some(POLL));
+        // A peer that stops reading can't hold the connection forever.
+        let _ = s.set_write_timeout(Some(IDLE));
+    }
+    let activity = Arc::new(Activity {
+        start: Instant::now(),
+        last_ms: AtomicU64::new(0),
+    });
+    let (tx, rx) = mpsc::channel();
+    let watch = gate.as_ref().is_some_and(HttpGate::awaiting_upgrade);
+    let (Ok(c2), Ok(u2)) = (client.try_clone(), upstream.try_clone()) else {
         return;
     };
-    let t = std::thread::Builder::new()
+    let act = activity.clone();
+    let back = std::thread::Builder::new()
         .stack_size(128 * 1024)
         .spawn(move || {
-            let _ = io::copy(&mut u2, &mut c2);
-            let _ = c2.shutdown(Shutdown::Write);
+            let result = pump(&u2, &c2, &act, watch.then_some(tx));
+            match result {
+                Ok(()) => {
+                    let _ = c2.shutdown(Shutdown::Write);
+                }
+                Err(_) => {
+                    let _ = c2.shutdown(Shutdown::Both);
+                    let _ = u2.shutdown(Shutdown::Both);
+                }
+            }
         });
-    let (mut c, mut u) = (client, upstream);
-    let _ = io::copy(&mut c, &mut u);
-    let _ = u.shutdown(Shutdown::Write);
-    if let Ok(t) = t {
+    if back.is_err() {
+        return;
+    }
+    let result = match gate {
+        Some(mut gate) => pump_http(&client, &upstream, &activity, &mut gate, Some(rx), shared),
+        None => pump(&client, &upstream, &activity, None),
+    };
+    match result {
+        Ok(()) => {
+            let _ = upstream.shutdown(Shutdown::Write);
+        }
+        Err(_) => {
+            let _ = client.shutdown(Shutdown::Both);
+            let _ = upstream.shutdown(Shutdown::Both);
+        }
+    }
+    if let Ok(t) = back {
         let _ = t.join();
     }
 }
@@ -196,5 +504,119 @@ fn original_dst(s: &TcpStream) -> io::Result<SocketAddr> {
             a.sin6_flowinfo,
             a.sin6_scope_id,
         )))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shared() -> Arc<Shared> {
+        Arc::new(Shared {
+            blocked: RwLock::new(Arc::new(["reddit.com".to_string()].into())),
+            refused: AtomicU64::new(0),
+            ports: vec![],
+            active: AtomicUsize::new(0),
+            max: 2,
+        })
+    }
+
+    /// A connected pair of sockets.
+    fn pair() -> (TcpStream, TcpStream) {
+        let l = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let a = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        (a, l.accept().unwrap().0)
+    }
+
+    /// Everything `s` receives until the other side closes or goes quiet.
+    fn drain(s: &TcpStream) -> Vec<u8> {
+        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut all = vec![];
+        let _ = (&*s).read_to_end(&mut all);
+        all
+    }
+
+    /// Relay a plain-HTTP connection whose first request (`first`) went
+    /// through; returns the browser's socket and the server's.
+    fn http_relay(first: &str) -> (TcpStream, TcpStream, Arc<Shared>) {
+        let shared = shared();
+        let (browser, client) = pair();
+        let (upstream, server) = pair();
+        let mut gate = HttpGate::default();
+        let mut out = vec![];
+        gate.feed(first.as_bytes(), &shared.blocked(), &mut out)
+            .unwrap();
+        (&upstream).write_all(&out).unwrap();
+        let s = shared.clone();
+        std::thread::spawn(move || relay(client, upstream, Some(gate), &s));
+        (browser, server, shared)
+    }
+
+    #[test]
+    fn later_requests_on_a_connection_are_checked() {
+        let ok = "GET / HTTP/1.1\r\nHost: example.org\r\n\r\n";
+        let (browser, server, shared) = http_relay(ok);
+        (&browser)
+            .write_all(b"GET / HTTP/1.1\r\nHost: old.reddit.com\r\n\r\n")
+            .unwrap();
+        assert_eq!(drain(&server), ok.as_bytes(), "only the allowed request");
+        assert_eq!(shared.refused.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn websocket_follows_the_servers_answer() {
+        let ws = "GET /chat HTTP/1.1\r\nHost: example.org\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n";
+        // Accepted: frames pass both ways.
+        let (browser, server, _) = http_relay(ws);
+        (&server)
+            .write_all(b"HTTP/1.1 101 Switching Protocols\r\n\r\n")
+            .unwrap();
+        (&browser).write_all(b"\x01frame").unwrap();
+        let mut buf = [0u8; 64];
+        server
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut got = vec![];
+        while got.len() < ws.len() + 6 {
+            let n = (&server).read(&mut buf).unwrap();
+            assert!(n > 0);
+            got.extend_from_slice(&buf[..n]);
+        }
+        assert_eq!(got, format!("{ws}\x01frame").as_bytes());
+
+        // Refused: what follows must be checked requests again.
+        let (browser, server, _) = http_relay(ws);
+        (&browser)
+            .write_all(b"GET / HTTP/1.1\r\nHost: reddit.com\r\n\r\n")
+            .unwrap();
+        (&server).write_all(b"HTTP/1.1 400 Nope\r\n\r\n").unwrap();
+        assert_eq!(drain(&server), ws.as_bytes());
+    }
+
+    #[test]
+    fn connections_beyond_the_limit_are_refused() {
+        let shared = shared();
+        let a = Slot::take(&shared).unwrap();
+        let _b = Slot::take(&shared).unwrap();
+        assert!(Slot::take(&shared).is_none());
+        drop(a);
+        assert!(Slot::take(&shared).is_some());
+    }
+
+    #[test]
+    fn listens_on_free_ports() {
+        let p = Proxy::start(0, 0).unwrap();
+        let ports = p.ports();
+        assert_ne!(ports.v4.0, 0);
+        assert_ne!(ports.v4.0, ports.v4.1);
+        // Another program can't take them, and can't have taken them before.
+        assert!(TcpListener::bind((Ipv4Addr::LOCALHOST, ports.v4.0)).is_err());
+        if let Some((tls, _)) = ports.v6 {
+            assert!(TcpListener::bind((Ipv6Addr::LOCALHOST, tls)).is_err());
+        }
+        // An occupied port is an error, not a filter quietly missing.
+        let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = taken.local_addr().unwrap().port();
+        assert!(Proxy::start(port, 0).is_err());
     }
 }

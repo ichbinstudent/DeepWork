@@ -2,12 +2,13 @@
 //!
 //! No I/O happens here; `tick` returns a [`Plan`] that the enforcer applies.
 
-use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use deepwork_core::format_time;
 use deepwork_core::model::{
-    Block, BlockConfig, DAY, LockKind, MAX_HARDCORE_SECONDS, Settings, WEEK_MINUTES, hash_password,
-    random_text, schedule_minutes, settings_weakening, today_key, validate_config, verify_password,
-    weakening_reasons,
+    Block, BlockConfig, DAY, HARDCORE_BREAK, LockKind, MAX_HARDCORE_SECONDS, Settings, TimeZone,
+    WEEK_MINUTES, hash_password, random_text, schedule_minutes, settings_weakening, system_zone,
+    today_key, validate_config, verify_password, weakening_reasons, zones_differ,
 };
 use deepwork_core::protocol::{
     BlockStatus, Capabilities, DayStats, Event, HardcoreStatus, NetStatus, Request, Response,
@@ -45,12 +46,27 @@ pub struct Persisted {
     pub frozen_until: f64,
     pub stats: Stats,
     pub settings: Settings,
+    /// Start of the current stretch of hardcore mode: administrator rights
+    /// kept away without a break of [`HARDCORE_BREAK`] or more (0: none).
+    pub hardcore_since: f64,
+    /// When administrator rights were last kept away.
+    pub hardcore_last: f64,
+    /// Websites of locked blocks, numbered in the order they were first
+    /// locked (see [`Plan::priority`]).
+    pub lock_order: BTreeMap<String, u64>,
+    pub next_lock_order: u64,
 }
 
 /// What the enforcer should do right now.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Plan {
     pub domains: BTreeSet<String>,
+    /// `domains`, most important first: websites of locked blocks in the
+    /// order they were locked, then the rest. Where only some fit (subdomains
+    /// in the hosts file, Chromium's 1000-entry blocklist) the first ones
+    /// win, so adding websites to a locked block, which is allowed, can't
+    /// push out ones it already blocked.
+    pub priority: Vec<String>,
     /// (rule, block name)
     pub apps: Vec<(String, String)>,
     pub frozen: bool,
@@ -73,6 +89,9 @@ pub struct Daemon {
     next_seq: u64,
     was_enforcing: HashSet<String>,
     was_frozen: bool,
+    was_hardcore: bool,
+    /// The time zone of the last tick; schedules follow the system's.
+    zone: Option<TimeZone>,
     /// Reported by the enforcer after each tick.
     pub net: NetStatus,
     pub hardcore: HardcoreStatus,
@@ -94,6 +113,8 @@ impl Daemon {
             next_seq: 1,
             was_enforcing: HashSet::new(),
             was_frozen: false,
+            was_hardcore: false,
+            zone: None,
             net: NetStatus::default(),
             hardcore: HardcoreStatus::default(),
             caps,
@@ -167,6 +188,12 @@ impl Daemon {
                 }
             }
             shift(&mut self.p.frozen_until);
+            // How long hardcore mode has been on stays the same.
+            for t in [&mut self.p.hardcore_since, &mut self.p.hardcore_last] {
+                if *t != 0.0 {
+                    *t += skew;
+                }
+            }
             self.dirty = true;
             self.push_event(
                 now,
@@ -175,11 +202,19 @@ impl Daemon {
                 "Timers were adjusted so the clock change doesn't end any blocks early.".into(),
             );
         }
+        let zone = system_zone();
+        if let Some(old) = self.zone.replace(zone.clone())
+            && zones_differ(&old, &zone, now)
+        {
+            self.zone_changed(&old, now);
+        }
 
         let boot = self.boot_id.clone();
         let mut plan = Plan::default();
         let mut enforcing_now = HashSet::new();
         let mut transitions = Vec::new();
+        let mut hardcore_wanted: f64 = 0.0;
+        let mut locked_sites = BTreeSet::new();
         for b in &mut self.p.blocks {
             if b.in_window(now) {
                 if b.rt.lock_boot_id.is_empty() {
@@ -208,14 +243,33 @@ impl Daemon {
             b.rt.allowance_used.retain(|k, _| *k > cutoff);
 
             if let Some(until) = b.hardcore_until(now) {
-                plan.hardcore_until = plan.hardcore_until.max(until);
+                hardcore_wanted = hardcore_wanted.max(until);
             }
-            if b.enforcing(now) {
+            let locked = b.in_window(now) && b.locked(now, &boot);
+            let enforcing = b.enforcing(now);
+            let sites = if locked || enforcing {
+                b.config.effective_websites()
+            } else {
+                BTreeSet::new()
+            };
+            if locked {
+                for site in &sites {
+                    if !self.p.lock_order.contains_key(site) {
+                        self.p
+                            .lock_order
+                            .insert(site.clone(), self.p.next_lock_order);
+                        self.p.next_lock_order += 1;
+                        self.dirty = true;
+                    }
+                }
+                locked_sites.extend(sites.iter().cloned());
+            }
+            if enforcing {
                 if b.config.lock == LockKind::Hardcore {
                     plan.block_tunnels = true;
                 }
                 enforcing_now.insert(b.id.clone());
-                plan.domains.extend(b.config.effective_websites());
+                plan.domains.extend(sites);
                 plan.apps.extend(
                     b.config
                         .effective_apps()
@@ -248,6 +302,22 @@ impl Daemon {
         }
         let focusing = !enforcing_now.is_empty();
         self.was_enforcing = enforcing_now;
+
+        let before = self.p.lock_order.len();
+        self.p
+            .lock_order
+            .retain(|site, _| locked_sites.contains(site));
+        if self.p.lock_order.len() != before {
+            self.dirty = true;
+        }
+        if self.p.lock_order.is_empty() {
+            self.p.next_lock_order = 0;
+        }
+        plan.priority = plan.domains.iter().cloned().collect();
+        // Stable: the rest stays in alphabetical order.
+        plan.priority
+            .sort_by_key(|site| self.p.lock_order.get(site).copied().unwrap_or(u64::MAX));
+        plan.hardcore_until = self.hardcore_cap(now, hardcore_wanted);
 
         plan.frozen = self.p.frozen_until > now;
         // Hardcore blocks always get the network protections.
@@ -286,6 +356,111 @@ impl Daemon {
                 format!("Blocked by “{block}”"),
             );
             self.dirty = true;
+        }
+    }
+
+    /// Until when administrator rights stay away (0: give them back now),
+    /// given that hardcore blocks want them away until `wanted`.
+    ///
+    /// All hardcore blocks together keep them away for at most
+    /// [`MAX_HARDCORE_SECONDS`] in one stretch; a gap shorter than
+    /// [`HARDCORE_BREAK`] doesn't end a stretch, and after a full one the
+    /// rights come back for that long, however the blocks were chained.
+    fn hardcore_cap(&mut self, now: f64, wanted: f64) -> f64 {
+        let recent = self.hardcore_stretch(now).is_some();
+        if wanted <= now {
+            if self.p.hardcore_since != 0.0 && !recent {
+                self.p.hardcore_since = 0.0;
+                self.p.hardcore_last = 0.0;
+                self.dirty = true;
+            }
+            self.was_hardcore = false;
+            return 0.0;
+        }
+        if !recent {
+            self.p.hardcore_since = now;
+            self.dirty = true;
+        }
+        let end = self.p.hardcore_since + MAX_HARDCORE_SECONDS;
+        if now >= end {
+            // The rights came back at `end`, and stay back for a while.
+            self.p.hardcore_last = self.p.hardcore_last.max(end);
+            if self.was_hardcore {
+                self.was_hardcore = false;
+                self.push_event(
+                    now,
+                    "hardcore_break",
+                    "Administrator rights are back for an hour".into(),
+                    format!(
+                        "Hardcore blocks kept them away for 7 days in a row. Blocking goes on; \
+                         hardcore mode resumes after {}.",
+                        format_time(self.p.hardcore_last + HARDCORE_BREAK)
+                    ),
+                );
+            }
+            return 0.0;
+        }
+        self.was_hardcore = true;
+        self.p.hardcore_last = now;
+        wanted.min(end)
+    }
+
+    /// Start of the running stretch of hardcore mode, or of one that ended
+    /// less than [`HARDCORE_BREAK`] ago (a new hardcore block continues it).
+    fn hardcore_stretch(&self, now: f64) -> Option<f64> {
+        (self.p.hardcore_since != 0.0 && now - self.p.hardcore_last < HARDCORE_BREAK)
+            .then_some(self.p.hardcore_since)
+    }
+
+    /// Refuse to keep administrator rights away from `start` to `end` for
+    /// longer than [`MAX_HARDCORE_SECONDS`] (`start`: the beginning of the
+    /// block's window, or of the stretch of hardcore mode it continues).
+    fn check_hardcore_length(&self, name: &str, start: f64, end: f64, now: f64) -> R<()> {
+        let start = start.min(self.hardcore_stretch(now).unwrap_or(start));
+        let limit = start + MAX_HARDCORE_SECONDS;
+        if end <= limit {
+            return Ok(());
+        }
+        if limit <= now {
+            return Err(format!(
+                "Hardcore blocks have kept administrator rights away for 7 days in a row, so \
+                 they are back for an hour. “{name}” can be hardcore again after {}.",
+                format_time(self.p.hardcore_last.max(limit) + HARDCORE_BREAK)
+            ));
+        }
+        Err(format!(
+            "“{name}” is hardcore, so it can run for at most 7 days in one go (together with \
+             hardcore blocks before it that ended less than an hour earlier), here until {}. \
+             Administrator rights must come back now and then, e.g. for updates.",
+            format_time(limit)
+        ))
+    }
+
+    /// The system's time zone changed, which Windows lets every user do.
+    /// Scheduled windows that were running in the old zone keep running, as
+    /// sessions, for the time they had left, so the change can't end a block
+    /// early. Later windows follow the new zone.
+    fn zone_changed(&mut self, old: &TimeZone, now: f64) {
+        let mut kept = false;
+        for b in &mut self.p.blocks {
+            if let Some((start, end)) = b.sched_window_in(now, old)
+                && end > now
+            {
+                if !b.session_active(now) {
+                    b.rt.session_start = start;
+                }
+                b.rt.session_until = b.rt.session_until.max(end);
+                kept = true;
+            }
+        }
+        if kept {
+            self.dirty = true;
+            self.push_event(
+                now,
+                "clock",
+                "Time zone change detected".into(),
+                "Scheduled blocks that were on keep running for the time they had left.".into(),
+            );
         }
     }
 
@@ -460,6 +635,9 @@ impl Daemon {
         self.check_supported(&config, None)?;
         self.check_hardcore(None, &config)?;
         let mut b = Block::new(config);
+        if let Some((start, end)) = b.hardcore_until(now).and_then(|_| b.window(now)) {
+            self.check_hardcore_length(&b.config.name, start, end, now)?;
+        }
         if b.config.protect_until > now {
             b.rt.protect_boot_id = self.boot_id.clone();
         }
@@ -493,6 +671,19 @@ impl Daemon {
             .map(|b| b.config.lock);
         self.check_supported(&new, old_lock)?;
         self.check_hardcore(Some(id), &new)?;
+        // Turning a running block hardcore, or making its window longer,
+        // must stay within the hardcore limit too.
+        if new.lock == LockKind::Hardcore
+            && let Some(old) = self.p.blocks.iter().find(|b| b.id == id)
+        {
+            let mut probe = old.clone();
+            probe.config = new.clone();
+            if let Some((start, end)) = probe.window(now)
+                && end > old.hardcore_until(now).unwrap_or(0.0)
+            {
+                self.check_hardcore_length(&new.name, start, end, now)?;
+            }
+        }
         let b = self.block_mut(id)?;
         let password = password.filter(|p| !p.is_empty());
         if b.locked(now, &boot) {
@@ -541,17 +732,18 @@ impl Daemon {
             return Err("Pick a duration between 1 minute and 30 days".into());
         }
         let boot = self.boot_id.clone();
-        let b = self.block_mut(id)?;
-        if b.config.lock == LockKind::Hardcore
-            && now + minutes as f64 * 60.0
-                > b.window(now).map_or(now, |w| w.0) + MAX_HARDCORE_SECONDS
-        {
-            return Err(format!(
-                "“{}” is hardcore, so it can run for at most 7 days in one go. Administrator \
-                 rights must come back now and then, e.g. for updates.",
-                b.config.name
-            ));
+        let b = self
+            .p
+            .blocks
+            .iter()
+            .find(|b| b.id == id)
+            .ok_or("No such block")?;
+        if b.config.lock == LockKind::Hardcore {
+            let start = b.window(now).map_or(now, |w| w.0);
+            let end = now + minutes as f64 * 60.0;
+            self.check_hardcore_length(&b.config.name, start, end, now)?;
         }
+        let b = self.block_mut(id)?;
         if b.config.blocks_nothing() {
             return Err(format!(
                 "“{}” has nothing to block yet. Add a website or an app first.",
@@ -745,6 +937,14 @@ mod tests {
         (d, id)
     }
 
+    /// A password and a wrong guess, generated so that no password is
+    /// written into the code.
+    fn test_password() -> (String, String) {
+        let password = random_text(12);
+        let wrong = password[1..].to_string();
+        (password, wrong)
+    }
+
     fn sites() -> BlockConfig {
         BlockConfig {
             name: "Social".into(),
@@ -910,6 +1110,187 @@ mod tests {
         assert!(!plan.block_tunnels);
     }
 
+    /// Tick every half hour from `from` to `to`, like the service does
+    /// every second; returns the last plan.
+    fn tick_through(d: &mut Daemon, from: f64, to: f64) -> Plan {
+        let mut t = from;
+        let mut plan = d.tick(t, 1.0, 1.0);
+        while t < to {
+            t = (t + 1800.0).min(to);
+            plan = d.tick(t, 1.0, 1.0);
+        }
+        plan
+    }
+
+    #[test]
+    fn hardcore_blocks_together_stop_after_7_days() {
+        let hardcore = |name: &str| BlockConfig {
+            name: name.into(),
+            lock: LockKind::Hardcore,
+            apps: vec!["steam".into()],
+            ..Default::default()
+        };
+        let mut d = Daemon::new(
+            Persisted::default(),
+            "boot-1".into(),
+            Capabilities::all("test"),
+        );
+        let mut ids = vec![];
+        for name in ["A", "B", "C"] {
+            let r = d.handle(
+                Request::CreateBlock {
+                    config: hardcore(name),
+                    password: None,
+                },
+                T,
+            );
+            ids.push(r.data.as_str().unwrap().to_string());
+        }
+        let start = |d: &mut Daemon, i: usize, minutes, now| {
+            d.handle(
+                Request::StartBlock {
+                    id: ids[i].clone(),
+                    minutes,
+                },
+                now,
+            )
+        };
+        let day = 24 * 60;
+        assert!(start(&mut d, 0, 6 * day, T).ok);
+        tick_through(&mut d, T, T + 5.0 * DAY);
+        // A second hardcore block continues the stretch: 7 days from T.
+        let r = start(&mut d, 1, 3 * day, T + 5.0 * DAY);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("at most 7 days"));
+        assert!(start(&mut d, 1, 2 * day, T + 5.0 * DAY).ok);
+        let plan = tick_through(&mut d, T + 5.0 * DAY, T + 7.0 * DAY - 60.0);
+        assert_eq!(plan.hardcore_until, T + 7.0 * DAY);
+        let plan = tick_through(&mut d, T + 7.0 * DAY - 60.0, T + 7.0 * DAY + 600.0);
+        assert_eq!(plan.hardcore_until, 0.0);
+
+        // Right after, a third one can't take the rights away again...
+        let r = start(&mut d, 2, day, T + 7.0 * DAY + 600.0);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("back for an hour"));
+        // ...but once they've been back for an hour, it can.
+        let later = T + 7.0 * DAY + 600.0 + HARDCORE_BREAK;
+        tick_through(&mut d, T + 7.0 * DAY + 600.0, later);
+        assert!(start(&mut d, 2, day, later).ok);
+        assert_eq!(d.tick(later + 1.0, 1.0, 1.0).hardcore_until, later + DAY);
+    }
+
+    /// However hardcore windows are chained (here: a session longer than
+    /// allowed, as a schedule could make it), rights come back after 7 days.
+    #[test]
+    fn hardcore_rights_come_back_after_7_days() {
+        let (mut d, _) = daemon_with(
+            BlockConfig {
+                lock: LockKind::Hardcore,
+                apps: vec!["steam".into()],
+                ..Default::default()
+            },
+            None,
+        );
+        d.p.blocks[0].rt.session_start = T;
+        d.p.blocks[0].rt.session_until = T + 10.0 * DAY;
+        let plan = tick_through(&mut d, T, T + 6.0 * DAY);
+        assert_eq!(plan.hardcore_until, T + 7.0 * DAY);
+        let plan = tick_through(&mut d, T + 6.0 * DAY, T + 7.0 * DAY + 60.0);
+        assert_eq!(plan.hardcore_until, 0.0, "rights are back");
+        assert!(plan.block_tunnels, "the block itself goes on");
+        assert!(
+            d.events
+                .iter()
+                .any(|e| e.kind == "hardcore_break" && e.ts >= T + 7.0 * DAY)
+        );
+        let plan = tick_through(&mut d, T + 7.0 * DAY + 60.0, T + 7.0 * DAY + 3000.0);
+        assert_eq!(plan.hardcore_until, 0.0, "for an hour");
+        let back = T + 7.0 * DAY + 60.0 + HARDCORE_BREAK;
+        let plan = tick_through(&mut d, T + 7.0 * DAY + 3000.0, back);
+        assert_eq!(plan.hardcore_until, T + 10.0 * DAY, "then hardcore again");
+        // The stretch survives a restart of the service.
+        let json = serde_json::to_string(&d.p).unwrap();
+        let mut d2 = Daemon::new(
+            serde_json::from_str(&json).unwrap(),
+            "boot-1".into(),
+            Capabilities::all("test"),
+        );
+        assert_eq!(
+            d2.tick(back + 60.0, 1.0, 1.0).hardcore_until,
+            T + 10.0 * DAY
+        );
+        assert_eq!(d2.p.hardcore_since, d.p.hardcore_since);
+    }
+
+    /// An unlocked block running for 30 days can't be made hardcore: that
+    /// would keep administrator rights away for longer than 7 days.
+    #[test]
+    fn long_sessions_cant_become_hardcore() {
+        let (mut d, id) = daemon_with(
+            BlockConfig {
+                apps: vec!["steam".into()],
+                ..Default::default()
+            },
+            None,
+        );
+        let hardcore = BlockConfig {
+            lock: LockKind::Hardcore,
+            ..d.p.blocks[0].config.clone()
+        };
+        let update = |d: &mut Daemon, now| {
+            d.handle(
+                Request::UpdateBlock {
+                    id: id.clone(),
+                    config: hardcore.clone(),
+                    password: None,
+                },
+                now,
+            )
+        };
+        assert!(
+            d.handle(
+                Request::StartBlock {
+                    id: id.clone(),
+                    minutes: 30 * 24 * 60
+                },
+                T
+            )
+            .ok
+        );
+        let r = update(&mut d, T + 60.0);
+        assert!(!r.ok);
+        assert!(r.error.unwrap().contains("at most 7 days"));
+        assert_ne!(d.p.blocks[0].config.lock, LockKind::Hardcore);
+
+        assert!(
+            d.handle(Request::StopBlock { id: id.clone() }, T + 120.0)
+                .ok
+        );
+        assert!(
+            d.handle(
+                Request::StartBlock {
+                    id: id.clone(),
+                    minutes: 120
+                },
+                T + 180.0
+            )
+            .ok
+        );
+        assert!(update(&mut d, T + 240.0).ok, "a short one may");
+        // Once hardcore, adding to it is fine.
+        let mut more = d.p.blocks[0].config.clone();
+        more.apps.push("lutris".into());
+        let r = d.handle(
+            Request::UpdateBlock {
+                id: id.clone(),
+                config: more,
+                password: None,
+            },
+            T + 300.0,
+        );
+        assert!(r.ok, "{:?}", r.error);
+    }
+
     #[test]
     fn hardcore_schedules_leave_time_free() {
         let week = |ranges: Vec<[u32; 2]>| BlockConfig {
@@ -1028,12 +1409,13 @@ mod tests {
         assert!(d.status(T + 16.0 * 60.0).blocks[0].locked);
 
         // Password.
-        let (mut d, id) = daemon_with(protect(LockKind::Password), Some("pw"));
+        let (password, wrong) = test_password();
+        let (mut d, id) = daemon_with(protect(LockKind::Password), Some(&password));
         assert!(
             !d.handle(
                 Request::Unlock {
                     id: id.clone(),
-                    response: "nope".into()
+                    response: wrong
                 },
                 T
             )
@@ -1043,7 +1425,7 @@ mod tests {
             d.handle(
                 Request::Unlock {
                     id: id.clone(),
-                    response: "pw".into()
+                    response: password
                 },
                 T
             )
@@ -1200,6 +1582,114 @@ mod tests {
         assert!(d.tick(jumped + 3700.0, 1.0, 1.0).domains.is_empty());
     }
 
+    /// Moving the system to another time zone (any Windows user may) doesn't
+    /// end a running scheduled block early.
+    #[test]
+    fn time_zone_change_does_not_end_a_scheduled_window() {
+        // A schedule that runs around T in a zone 5 hours east of the
+        // system's, so it isn't running in the system's own zone.
+        use deepwork_core::model::{fixed_zone, utc_offset};
+        let east = fixed_zone(utc_offset(&system_zone(), T) + 5 * 3600);
+        let m = deepwork_core::model::minute_of_week_in(T, &east) as u32;
+        assert!(m >= 60 && m + 60 <= WEEK_MINUTES);
+        let cfg = BlockConfig {
+            schedule: vec![[m - 60, m + 60]],
+            schedule_enabled: true,
+            lock: LockKind::Strict,
+            ..sites()
+        };
+        let (mut d, id) = daemon_with(cfg, None);
+        assert!(d.p.blocks[0].sched_window_in(T, &east).is_some());
+        assert!(d.p.blocks[0].sched_window(T).is_none());
+
+        // The service last saw the eastern zone; now the system's is back.
+        d.zone = Some(east);
+        let plan = d.tick(T, 1.0, 1.0);
+        assert!(plan.domains.contains("reddit.com"), "still blocking");
+        assert!(
+            !d.handle(Request::StopBlock { id }, T + 1.0).ok,
+            "still locked"
+        );
+        assert!(d.events.iter().any(|e| e.title.contains("Time zone")));
+        // It ends when the window would have ended.
+        assert!(!d.tick(T + 3500.0, 1.0, 1.0).domains.is_empty());
+        assert!(d.tick(T + 3700.0, 1.0, 1.0).domains.is_empty());
+        // No change, nothing happens.
+        let events = d.events.len();
+        d.tick(T + 3701.0, 1.0, 1.0);
+        assert_eq!(d.events.len(), events);
+    }
+
+    /// Websites added to a locked block, which is allowed, go behind the
+    /// ones it already blocked, so they can't push those out of the hosts
+    /// file's subdomains or Chromium's 1000-entry blocklist.
+    #[test]
+    fn websites_of_locked_blocks_come_first() {
+        // A big unlocked block from before.
+        let many: Vec<String> = (0..3000).map(|i| format!("a{i:04}.example")).collect();
+        let (mut d, big) = daemon_with(
+            BlockConfig {
+                name: "Imported".into(),
+                websites: many.clone(),
+                ..Default::default()
+            },
+            None,
+        );
+        let r = d.handle(
+            Request::CreateBlock {
+                config: BlockConfig {
+                    lock: LockKind::Strict,
+                    ..sites()
+                },
+                password: None,
+            },
+            T,
+        );
+        let locked = r.data.as_str().unwrap().to_string();
+        for id in [&big, &locked] {
+            d.handle(
+                Request::StartBlock {
+                    id: id.clone(),
+                    minutes: 60,
+                },
+                T,
+            );
+        }
+        let plan = d.tick(T, 1.0, 1.0);
+        assert_eq!(plan.priority[0], "reddit.com");
+        assert_eq!(plan.priority.len(), plan.domains.len());
+
+        // Add thousands of sites that sort before it to the locked block.
+        let mut cfg = d.p.blocks[1].config.clone();
+        cfg.websites
+            .extend((0..3000).map(|i| format!("a{i:04}.earlier")));
+        assert!(
+            d.handle(
+                Request::UpdateBlock {
+                    id: locked.clone(),
+                    config: cfg,
+                    password: None,
+                },
+                T + 1.0
+            )
+            .ok
+        );
+        let plan = d.tick(T + 2.0, 1.0, 1.0);
+        assert_eq!(plan.priority[0], "reddit.com");
+        assert!(plan.priority[1].ends_with(".earlier"));
+        assert!(plan.priority[3001].ends_with(".example"));
+        // Kept through a restart, forgotten once the lock is over.
+        let json = serde_json::to_string(&d.p).unwrap();
+        let mut d = Daemon::new(
+            serde_json::from_str(&json).unwrap(),
+            "boot-1".into(),
+            Capabilities::all("test"),
+        );
+        assert_eq!(d.tick(T + 3.0, 1.0, 1.0).priority[0], "reddit.com");
+        d.tick(T + 3601.0, 1.0, 1.0);
+        assert!(d.p.lock_order.is_empty());
+    }
+
     #[test]
     fn empty_block_cannot_start() {
         let (mut d, id) = daemon_with(BlockConfig::default(), None);
@@ -1269,7 +1759,7 @@ mod tests {
             !d.handle(
                 Request::Unlock {
                     id: id.clone(),
-                    response: "nope".into()
+                    response: text[1..].to_string()
                 },
                 T + 7.0
             )
@@ -1291,12 +1781,13 @@ mod tests {
 
     #[test]
     fn password_lock_flow() {
+        let (password, wrong) = test_password();
         let (mut d, id) = daemon_with(
             BlockConfig {
                 lock: LockKind::Password,
                 ..sites()
             },
-            Some("s3cret"),
+            Some(&password),
         );
         d.handle(
             Request::StartBlock {
@@ -1309,7 +1800,7 @@ mod tests {
             !d.handle(
                 Request::Unlock {
                     id: id.clone(),
-                    response: "wrong".into()
+                    response: wrong
                 },
                 T + 1.0
             )
@@ -1319,7 +1810,7 @@ mod tests {
             d.handle(
                 Request::Unlock {
                     id: id.clone(),
-                    response: "s3cret".into()
+                    response: password
                 },
                 T + 1.0
             )

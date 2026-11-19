@@ -39,7 +39,9 @@ pub struct Options {
     pub sandbox: bool,
     /// Use the network protections even in the sandbox (test namespaces).
     pub force_net: bool,
-    /// Only processes of users with at least this uid are network-filtered.
+    /// Lowest uid of a person's account. Only their processes are
+    /// network-filtered or closed by app blocks; root and system accounts
+    /// (services) never are.
     pub filter_uid_min: u32,
     /// Ports of the local HTTPS and HTTP filter.
     pub filter_ports: (u16, u16),
