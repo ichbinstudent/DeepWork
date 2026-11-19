@@ -7,6 +7,7 @@ fn shared() -> Arc<Shared> {
         ports: vec![],
         active: AtomicUsize::new(0),
         max: 2,
+        names: Mutex::new(HashMap::new()),
     })
 }
 
@@ -107,4 +108,46 @@ fn listens_on_free_ports() {
     let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = taken.local_addr().unwrap().port();
     assert!(Proxy::start(port, 0).is_err());
+}
+
+/// The site name is all the filter sees, so an allowed name sent to some
+/// other address (a blocked site's) goes to the allowed site instead.
+#[test]
+fn https_goes_where_the_name_leads() {
+    let addr = |s: &str| s.parse::<SocketAddr>().unwrap();
+    let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+    let site = [ip("192.0.2.1"), ip("192.0.2.2"), ip("2001:db8::1")];
+    // Sent to one of the name's addresses: kept.
+    assert_eq!(
+        upstream(addr("192.0.2.2:443"), &site),
+        Some(addr("192.0.2.2:443"))
+    );
+    assert_eq!(
+        upstream(addr("[2001:db8::1]:443"), &site),
+        Some(addr("[2001:db8::1]:443"))
+    );
+    // Sent elsewhere: to the name's own address, same IP version first.
+    assert_eq!(
+        upstream(addr("198.51.100.9:443"), &site),
+        Some(addr("192.0.2.1:443"))
+    );
+    assert_eq!(
+        upstream(addr("[2001:db8::99]:8443"), &site),
+        Some(addr("[2001:db8::1]:8443"))
+    );
+    assert_eq!(
+        upstream(addr("198.51.100.9:443"), &[ip("2001:db8::1")]),
+        Some(addr("[2001:db8::1]:443"))
+    );
+    // A name without an address is refused.
+    assert_eq!(upstream(addr("198.51.100.9:443"), &[]), None);
+}
+
+#[test]
+fn looks_names_up() {
+    let shared = shared();
+    let ips = addresses(&shared, "localhost", 443);
+    assert!(ips.iter().all(IpAddr::is_loopback) && !ips.is_empty());
+    assert!(addresses(&shared, "no-such-name.invalid", 443).is_empty());
+    assert_eq!(shared.names.lock().unwrap().len(), 1);
 }

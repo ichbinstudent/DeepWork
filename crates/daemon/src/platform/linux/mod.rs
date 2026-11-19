@@ -13,9 +13,11 @@ mod netfilter;
 mod procs;
 mod proxy;
 
+use std::collections::HashSet;
 use std::fs;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 
 use super::{Options, Paths, Platform, System, spawn_quiet};
 use crate::browser::{ChromiumFlavor, Layout};
@@ -45,6 +47,7 @@ pub fn platform(opts: &Options) -> Platform {
         system: Box::new(LinuxSystem {
             hosts: opts.root.join("etc/hosts"),
             run,
+            uid_min: opts.filter_uid_min,
         }),
         browsers: Some(Layout {
             chromium: CHROMIUM_FLAVORS,
@@ -66,6 +69,34 @@ struct LinuxSystem {
     hosts: PathBuf,
     /// Run system commands (off in the sandbox).
     run: bool,
+    /// Lowest uid of a person's account: only their connections are cut.
+    uid_min: u32,
+}
+
+/// `ss` filter for connections to websites.
+const WEB_PORTS: &str = "( dport = :443 or dport = :80 )";
+
+/// The connections in `ss -tnHe state established` output that may be cut:
+/// to a website (port 443 or 80) at one of `ips`, made by a person's
+/// account. Root's and services' connections, and connections coming in
+/// (SSH, say), stay up whatever address a website is given. Returns each
+/// one's local and remote address the way `ss` writes them.
+fn web_connections(listing: &str, ips: &HashSet<IpAddr>, uid_min: u32) -> Vec<(String, String)> {
+    listing
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let (local, peer) = (*fields.get(2)?, *fields.get(3)?);
+            let remote: SocketAddr = peer.parse().ok()?;
+            // ss leaves the uid out for root's connections.
+            let uid = fields.iter().find_map(|f| f.strip_prefix("uid:"))?;
+            let person = procs::is_user_account(uid.parse().ok()?, uid_min);
+            (person
+                && matches!(remote.port(), 443 | 80)
+                && ips.contains(&remote.ip().to_canonical()))
+            .then(|| (local.to_string(), peer.to_string()))
+        })
+        .collect()
 }
 
 impl System for LinuxSystem {
@@ -80,20 +111,26 @@ impl System for LinuxSystem {
     }
 
     fn cut_connections(&self, ips: &[IpAddr]) {
-        if !self.run {
+        if !self.run || ips.is_empty() {
             return;
         }
-        for chunk in ips.chunks(16) {
-            let mut args = vec!["-K".to_string()];
-            for (i, ip) in chunk.iter().enumerate() {
-                if i > 0 {
-                    args.push("or".into());
-                }
-                args.push("dst".into());
-                args.push(ip.to_string());
-            }
-            let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-            spawn_quiet("ss", &refs);
+        let Ok(out) = Command::new("ss")
+            .args(["-tnHe", "state", "established", WEB_PORTS])
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .output()
+        else {
+            return;
+        };
+        let ips: HashSet<IpAddr> = ips.iter().map(IpAddr::to_canonical).collect();
+        let listing = String::from_utf8_lossy(&out.stdout);
+        for chunk in web_connections(&listing, &ips, self.uid_min).chunks(16) {
+            let filter = chunk
+                .iter()
+                .map(|(local, peer)| format!("( src {local} dst {peer} )"))
+                .collect::<Vec<_>>()
+                .join(" or ");
+            spawn_quiet("ss", &["-K", "-tn", "state", "established", &filter]);
         }
     }
 
@@ -167,3 +204,6 @@ const FIREFOX_MARKERS: &[&str] = &[
     "/opt/firefox",
     "/usr/bin/firefox",
 ];
+
+#[cfg(test)]
+mod tests;
