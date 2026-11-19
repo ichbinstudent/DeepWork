@@ -1,0 +1,6 @@
+name: DeepWork
+
+# Unit tests live in a tests.rs next to the code they test (`#[cfg(test)] mod tests;`). They use
+# made-up passwords, keys and paths on purpose, which CodeQL would report as findings.
+paths-ignore:
+  - "**/tests.rs"
