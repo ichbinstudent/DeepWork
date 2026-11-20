@@ -9,7 +9,7 @@
 //! - freeze: needs an agent in the user's session (`CGSession -suspend`).
 //! - network ([`NetGuard`](super::NetGuard)): `pf` anchors for encrypted DNS
 //!   and tunnels; the web filter needs a Network Extension content filter.
-//! - hardcore ([`AdminLockout`](super::AdminLockout)): a sudoers drop-in
+//! - hardcore ([`AdminLockout`](super::AdminLockout)): the sudoers rule
 //!   works as on Linux; admin rights also come from the `admin` group and
 //!   the authorization database (`security authorizationdb`).
 //!

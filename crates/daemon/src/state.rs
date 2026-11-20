@@ -220,7 +220,6 @@ impl Daemon {
         let mut enforcing_now = HashSet::new();
         let mut transitions = Vec::new();
         let mut hardcore_wanted: f64 = 0.0;
-        let mut locked_sites = BTreeSet::new();
         for b in &mut self.p.blocks {
             if let Some((start, _)) = b.window(now) {
                 if b.rt.lock_boot_id.is_empty() {
@@ -260,31 +259,13 @@ impl Daemon {
             if let Some(until) = b.hardcore_until(now) {
                 hardcore_wanted = hardcore_wanted.max(until);
             }
-            let locked = b.in_window(now) && b.locked(now, &boot);
             let enforcing = b.enforcing(now);
-            let sites = if locked || enforcing {
-                b.config.effective_websites()
-            } else {
-                BTreeSet::new()
-            };
-            if locked {
-                for site in &sites {
-                    if !self.p.lock_order.contains_key(site) {
-                        self.p
-                            .lock_order
-                            .insert(site.clone(), self.p.next_lock_order);
-                        self.p.next_lock_order += 1;
-                        self.dirty = true;
-                    }
-                }
-                locked_sites.extend(sites.iter().cloned());
-            }
             if enforcing {
                 if b.config.lock == LockKind::Hardcore {
                     plan.block_tunnels = true;
                 }
                 enforcing_now.insert(b.id.clone());
-                plan.domains.extend(sites);
+                plan.domains.extend(b.config.effective_websites());
                 plan.apps.extend(
                     b.config
                         .effective_apps()
@@ -318,16 +299,7 @@ impl Daemon {
         let focusing = !enforcing_now.is_empty();
         self.was_enforcing = enforcing_now;
 
-        let before = self.p.lock_order.len();
-        self.p
-            .lock_order
-            .retain(|site, _| locked_sites.contains(site));
-        if self.p.lock_order.len() != before {
-            self.dirty = true;
-        }
-        if self.p.lock_order.is_empty() {
-            self.p.next_lock_order = 0;
-        }
+        self.order_locked_sites(now);
         plan.priority = plan.domains.iter().cloned().collect();
         // Stable: the rest stays in alphabetical order.
         plan.priority
@@ -454,6 +426,40 @@ impl Daemon {
     /// Notice a change of the system's time zone. Requests do this too, before
     /// they look at any schedule: a lock check in the new zone must not come
     /// before the running windows of the old one are kept.
+    /// Numbers the websites of locked blocks in the order they were first
+    /// locked, and forgets those no locked block has any more (see
+    /// [`Plan::priority`]). A block protected until a date counts while it
+    /// isn't running too: websites added to it then must still go behind
+    /// the ones it had.
+    fn order_locked_sites(&mut self, now: f64) {
+        let mut locked_sites = BTreeSet::new();
+        for b in &self.p.blocks {
+            if !b.locked(now, &self.boot_id) {
+                continue;
+            }
+            for site in b.config.effective_websites() {
+                if !self.p.lock_order.contains_key(&site) {
+                    self.p
+                        .lock_order
+                        .insert(site.clone(), self.p.next_lock_order);
+                    self.p.next_lock_order += 1;
+                    self.dirty = true;
+                }
+                locked_sites.insert(site);
+            }
+        }
+        let before = self.p.lock_order.len();
+        self.p
+            .lock_order
+            .retain(|site, _| locked_sites.contains(site));
+        if self.p.lock_order.len() != before {
+            self.dirty = true;
+        }
+        if self.p.lock_order.is_empty() {
+            self.p.next_lock_order = 0;
+        }
+    }
+
     fn follow_zone(&mut self, now: f64) {
         let zone = system_zone();
         if let Some(old) = self.zone.replace(zone.clone())
@@ -691,6 +697,9 @@ impl Daemon {
         let boot = self.boot_id.clone();
         let new = validate_config(config).map_err(|e| e.0)?;
         check_protection(&new, now)?;
+        // Websites this adds to a locked block go behind the ones it has,
+        // even before the next tick.
+        self.order_locked_sites(now);
         let old_lock = self
             .p
             .blocks
