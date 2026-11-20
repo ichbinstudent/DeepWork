@@ -54,11 +54,17 @@ Fixes for problems found by code scanning:
   behind its earlier websites, so they can't push those out of the hosts file's subdomains or
   Chromium's blocklist when it runs.
 - Closing open connections when a website is added to a running block only closes outgoing web
-  connections (ports 443 and 80), and on Linux only those of people's accounts. Giving a website
-  the address of another machine no longer cuts off root's or a service's connections to it, or
-  SSH and Remote Desktop sessions from it.
-- HTTPS filter: a connection goes to an address of the site it names. Sending an allowed site's
-  name to a blocked site's address no longer reaches the blocked site.
+  connections (ports 443 and 80) of people's programs (Linux: people's accounts; Windows: programs
+  in someone's session). Giving a website the address of another machine no longer cuts off root's
+  or a service's connections to it, or SSH and Remote Desktop sessions from it.
+- Files the service replaces, such as `/etc/hosts` and `/etc/sudoers`, keep their SELinux label.
+- HTTPS filter: a site name must lead to the address the connection goes to (by the system's DNS),
+  for HTTPS and plain HTTP alike. Sending an allowed site's name (or an address in place of a
+  name) to a blocked site's server no longer reaches the blocked site, and the filter never
+  connects anywhere the program didn't, so it can't be used to get past the firewall's
+  encrypted-DNS and VPN rules. Plain HTTP by address only works for local networks (routers,
+  printers). Connections through the filter are closed as soon as their site gets blocked, and one
+  user can no longer take all of its connections.
 - Hardcore mode on Linux: the sudo rule now goes at the end of `/etc/sudoers`, after every file it
   includes, so a file in `/etc/sudoers.d` that sorts later, or a rule after the include, can't
   grant sudo again. doas is denied to everyone a `permit` rule names, not only to `wheel` and

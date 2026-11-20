@@ -14,24 +14,28 @@ use std::ptr::{null, null_mut};
 
 use windows_sys::Win32::Foundation::{ERROR_INSUFFICIENT_BUFFER, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
-    GetTcp6Table, GetTcpTable, MIB_TCP_STATE_CLOSED, MIB_TCP_STATE_DELETE_TCB,
-    MIB_TCP_STATE_LISTEN, MIB_TCP_STATE_TIME_WAIT, MIB_TCP6ROW, MIB_TCP6TABLE, MIB_TCPROW_LH,
-    MIB_TCPTABLE, SetTcpEntry,
+    GetExtendedTcpTable, MIB_TCP_STATE_CLOSED, MIB_TCP_STATE_DELETE_TCB, MIB_TCP_STATE_LISTEN,
+    MIB_TCP_STATE_TIME_WAIT, MIB_TCP6ROW_OWNER_PID, MIB_TCPROW_LH, MIB_TCPROW_LH_0,
+    MIB_TCPROW_OWNER_PID, SetTcpEntry, TCP_TABLE_OWNER_PID_CONNECTIONS,
 };
+use windows_sys::Win32::Networking::WinSock::{AF_INET, AF_INET6};
 use windows_sys::Win32::System::LibraryLoader::{
     GetProcAddress, LOAD_LIBRARY_SEARCH_SYSTEM32, LoadLibraryExW,
 };
+use windows_sys::Win32::System::RemoteDesktop::ProcessIdToSessionId;
 
 /// Close every TCP connection to a website (port 443 or 80) at one of
-/// `ips`. Connections coming in (Remote Desktop, file sharing) stay up
-/// whatever address a website is given.
+/// `ips` that a program in someone's session made. Services' and SYSTEM's
+/// connections (session 0), and connections coming in (Remote Desktop, file
+/// sharing), stay up whatever address a website is given.
 pub fn cut(ips: &[IpAddr]) {
     let targets: HashSet<IpAddr> = ips.iter().map(|ip| ip.to_canonical()).collect();
     if targets.is_empty() {
         return;
     }
-    let (closed, error) =
-        cut_where(|remote| matches!(remote.port(), 443 | 80) && targets.contains(&remote.ip()));
+    let (closed, error) = cut_where(|remote, pid| {
+        matches!(remote.port(), 443 | 80) && targets.contains(&remote.ip()) && in_session(pid)
+    });
     if let Some(e) = error {
         eprintln!("deepwork: cannot close some connections (error {e})");
     }
@@ -40,9 +44,17 @@ pub fn cut(ips: &[IpAddr]) {
     }
 }
 
-/// Close the connections whose remote end matches. Returns how many were
-/// closed and the last error, if any failed.
-fn cut_where(matches: impl Fn(SocketAddr) -> bool) -> (usize, Option<u32>) {
+/// Whether process `pid` runs in someone's session, not in session 0 with
+/// the services. Unknown counts as not.
+fn in_session(pid: u32) -> bool {
+    let mut session = 0;
+    // SAFETY: valid out pointer.
+    unsafe { ProcessIdToSessionId(pid, &mut session) != 0 && session != 0 }
+}
+
+/// Close the connections whose remote end and owning process match.
+/// Returns how many were closed and the last error, if any failed.
+fn cut_where(matches: impl Fn(SocketAddr, u32) -> bool) -> (usize, Option<u32>) {
     let mut closed = 0;
     let mut error = None;
     let mut done = |ret: u32, error: &mut Option<u32>| match ret {
@@ -50,39 +62,61 @@ fn cut_where(matches: impl Fn(SocketAddr) -> bool) -> (usize, Option<u32>) {
         e => *error = Some(e),
     };
 
-    // SAFETY: GetTcpTable fills the buffer with a MIB_TCPTABLE.
-    let rows4 = read_table::<MIB_TCPROW_LH>(|buf, size| unsafe {
-        GetTcpTable(buf.cast::<MIB_TCPTABLE>(), size, 0)
+    // SAFETY: GetExtendedTcpTable fills the buffer with a
+    // MIB_TCPTABLE_OWNER_PID.
+    let rows4 = read_table::<MIB_TCPROW_OWNER_PID>(|buf, size| unsafe {
+        GetExtendedTcpTable(
+            buf.cast(),
+            size,
+            0,
+            AF_INET.into(),
+            TCP_TABLE_OWNER_PID_CONNECTIONS,
+            0,
+        )
     });
-    for mut row in rows4 {
-        // SAFETY: both union fields are the same 32-bit state.
-        if !open(unsafe { row.Anonymous.State }) {
+    for row in rows4 {
+        if !open(row.dwState as i32) {
             continue;
         }
         // Addresses and ports are in network byte order.
         let ip = Ipv4Addr::from(row.dwRemoteAddr.to_ne_bytes());
-        if matches(SocketAddr::new(IpAddr::V4(ip), port(row.dwRemotePort))) {
-            row.Anonymous.State = MIB_TCP_STATE_DELETE_TCB;
-            // SAFETY: a row as GetTcpTable returned it, with the new state.
-            done(unsafe { SetTcpEntry(&row) }, &mut error);
+        let remote = SocketAddr::new(IpAddr::V4(ip), port(row.dwRemotePort));
+        if matches(remote, row.dwOwningPid) {
+            // The same connection as a MIB_TCPROW, to be deleted.
+            let delete = MIB_TCPROW_LH {
+                Anonymous: MIB_TCPROW_LH_0 {
+                    State: MIB_TCP_STATE_DELETE_TCB,
+                },
+                dwLocalAddr: row.dwLocalAddr,
+                dwLocalPort: row.dwLocalPort,
+                dwRemoteAddr: row.dwRemoteAddr,
+                dwRemotePort: row.dwRemotePort,
+            };
+            // SAFETY: a valid row.
+            done(unsafe { SetTcpEntry(&delete) }, &mut error);
         }
     }
 
-    // SAFETY: GetTcp6Table fills the buffer with a MIB_TCP6TABLE.
-    let rows6 = read_table::<MIB_TCP6ROW>(|buf, size| unsafe {
-        GetTcp6Table(buf.cast::<MIB_TCP6TABLE>(), size, 0)
+    // SAFETY: GetExtendedTcpTable fills the buffer with a
+    // MIB_TCP6TABLE_OWNER_PID.
+    let rows6 = read_table::<MIB_TCP6ROW_OWNER_PID>(|buf, size| unsafe {
+        GetExtendedTcpTable(
+            buf.cast(),
+            size,
+            0,
+            AF_INET6.into(),
+            TCP_TABLE_OWNER_PID_CONNECTIONS,
+            0,
+        )
     });
     let mut set = None;
     for row in rows6 {
-        if !open(row.State) {
+        if !open(row.dwState as i32) {
             continue;
         }
-        // SAFETY: every bit pattern is a valid byte array.
-        let ip = Ipv6Addr::from(unsafe { row.RemoteAddr.u.Byte });
-        if !matches(SocketAddr::new(
-            IpAddr::V6(ip).to_canonical(),
-            port(row.dwRemotePort),
-        )) {
+        let ip = Ipv6Addr::from(row.ucRemoteAddr);
+        let remote = SocketAddr::new(IpAddr::V6(ip).to_canonical(), port(row.dwRemotePort));
+        if !matches(remote, row.dwOwningPid) {
             continue;
         }
         let Some(set) = *set.get_or_insert_with(nsi_set_all_parameters) else {
@@ -91,9 +125,11 @@ fn cut_where(matches: impl Fn(SocketAddr) -> bool) -> (usize, Option<u32>) {
         };
         // The connection's key: its local and remote SOCKADDR_IN6.
         let mut key = [0u8; 56];
-        // SAFETY: as above.
-        let local = unsafe { row.LocalAddr.u.Byte };
-        key[..28].copy_from_slice(&sockaddr_in6(local, row.dwLocalPort, row.dwLocalScopeId));
+        key[..28].copy_from_slice(&sockaddr_in6(
+            row.ucLocalAddr,
+            row.dwLocalPort,
+            row.dwLocalScopeId,
+        ));
         key[28..].copy_from_slice(&sockaddr_in6(
             ip.octets(),
             row.dwRemotePort,
@@ -182,7 +218,7 @@ fn port(field: u32) -> u16 {
 }
 
 /// Read a `{ count: u32, rows: [Row] }` table with a `GetTcpTable`-style
-/// function, growing the buffer until it fits.
+/// function (`get(buffer, size)`), growing the buffer until it fits.
 fn read_table<Row: Copy>(get: impl Fn(*mut u8, *mut u32) -> u32) -> Vec<Row> {
     const { assert!(align_of::<Row>() <= 4) };
     let mut buf: Vec<u32> = Vec::new();

@@ -98,6 +98,22 @@ pub fn parse_sni(hs: &[u8]) -> Option<String> {
     None
 }
 
+/// What a filter checks a connection's site names against.
+pub trait Sites {
+    /// Whether `host` is blocked.
+    fn blocked(&self, host: &str) -> bool;
+    /// Whether a request for `host` may go where the connection goes.
+    fn reaches(&self, _host: &str) -> bool {
+        true
+    }
+}
+
+impl Sites for HashSet<String> {
+    fn blocked(&self, host: &str) -> bool {
+        is_blocked(host, self)
+    }
+}
+
 // ----------------------------------------------------------------------------- HTTP
 
 /// Longest chunk-size line or trailer section accepted in a request body.
@@ -108,8 +124,9 @@ const MAX_HTTP_LINE: usize = 4 * 1024;
 pub enum Stop {
     /// A request for this blocked site.
     Blocked(String),
-    /// Not plain HTTP/1.x with a site name, or framed in a way that a server
-    /// might read differently from the filter (which could hide a request).
+    /// Not plain HTTP/1.x with a site name, framed in a way that a server
+    /// might read differently from the filter (which could hide a request),
+    /// or for a site that isn't where the connection goes.
     Invalid,
 }
 
@@ -151,6 +168,8 @@ pub struct HttpGate {
     upgrade: bool,
     /// Size of the current request's trailer section so far.
     trailers: usize,
+    /// Site names of the first request.
+    first_hosts: Vec<String>,
 }
 
 /// A parsed request head.
@@ -296,14 +315,15 @@ impl HttpGate {
 
     /// Take bytes from the client and append what may go on to the server
     /// to `out`. On an error, `out` still holds what came before it.
-    pub fn feed(
-        &mut self,
-        input: &[u8],
-        blocked: &HashSet<String>,
-        out: &mut Vec<u8>,
-    ) -> Result<(), Stop> {
+    pub fn feed(&mut self, input: &[u8], sites: &dyn Sites, out: &mut Vec<u8>) -> Result<(), Stop> {
         self.pending.extend_from_slice(input);
-        self.run(blocked, out)
+        self.run(sites, out)
+    }
+
+    /// The site names of the first request (a WebSocket can only come
+    /// from that one).
+    pub fn first_hosts(&self) -> &[String] {
+        &self.first_hosts
     }
 
     /// The server answered the upgrade request: with `101 Switching
@@ -312,13 +332,13 @@ impl HttpGate {
     pub fn upgrade_answered(
         &mut self,
         switched: bool,
-        blocked: &HashSet<String>,
+        sites: &dyn Sites,
         out: &mut Vec<u8>,
     ) -> Result<(), Stop> {
         if self.state == Gate::AwaitUpgrade {
             self.state = if switched { Gate::Open } else { Gate::Head };
         }
-        self.run(blocked, out)
+        self.run(sites, out)
     }
 
     fn request_done(&mut self) {
@@ -329,7 +349,7 @@ impl HttpGate {
         };
     }
 
-    fn run(&mut self, blocked: &HashSet<String>, out: &mut Vec<u8>) -> Result<(), Stop> {
+    fn run(&mut self, sites: &dyn Sites, out: &mut Vec<u8>) -> Result<(), Stop> {
         let data = std::mem::take(&mut self.pending);
         let mut pos = 0;
         let result = loop {
@@ -354,8 +374,11 @@ impl HttpGate {
                         Ok(h) => h,
                         Err(e) => break Err(e),
                     };
-                    if let Some(host) = head.hosts.iter().find(|h| is_blocked(h, blocked)) {
+                    if let Some(host) = head.hosts.iter().find(|h| sites.blocked(h)) {
                         break Err(Stop::Blocked(host.clone()));
+                    }
+                    if !head.hosts.iter().all(|h| sites.reaches(h)) {
+                        break Err(Stop::Invalid);
                     }
                     // A switch of protocols is only followed on a fresh connection.
                     if head.websocket && self.started {
@@ -363,6 +386,9 @@ impl HttpGate {
                     }
                     out.extend_from_slice(&head.bytes);
                     pos += end + 4;
+                    if !self.started {
+                        self.first_hosts = head.hosts;
+                    }
                     self.started = true;
                     self.upgrade = head.websocket;
                     match head.body {

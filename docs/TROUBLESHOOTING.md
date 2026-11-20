@@ -42,6 +42,15 @@ name back. If it happens again, an administrator should find out which program i
   *Reload policies* if it doesn't. Firefox picks up its policy at its next start.
 - On Linux, turn on the HTTPS filter in Settings to cover every app.
 
+## An allowed site or app doesn't connect (Linux, HTTPS filter)
+
+While websites are blocked, the HTTPS filter only lets a connection through if it names its site
+and the name leads to the address it goes to (by the system's DNS). It refuses HTTPS to bare IP
+addresses, plain HTTP to addresses outside your local network, and programs that look names up
+some other way (their own DNS server, or addresses built in). That is on purpose: otherwise an
+allowed name could carry a blocked site. Such programs work again when the block ends, or with the
+HTTPS filter off in Settings (hardcore blocks keep it on).
+
 ## Sites stay blocked after a block ended
 
 The service removes its entries when nothing is blocked any more. If the service was removed
