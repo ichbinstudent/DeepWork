@@ -59,8 +59,10 @@ pub trait System: Send {
     fn hosts_file(&self) -> Option<PathBuf>;
     /// Make the OS forget cached DNS answers after the hosts file changed.
     fn flush_dns(&self) {}
-    /// Close open TCP connections to these addresses, so browsers reconnect
-    /// and hit the block.
+    /// Close open connections to websites (port 443 or 80) at these
+    /// addresses, so browsers reconnect and hit the block. Only outgoing
+    /// connections, and on Linux only people's own, never root's or a
+    /// service's.
     fn cut_connections(&self, _ips: &[IpAddr]) {}
     /// Whether [`System::lock_screen`] works (needed by Freeze).
     fn can_lock_screen(&self) -> bool {

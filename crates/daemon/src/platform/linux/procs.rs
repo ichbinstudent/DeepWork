@@ -41,6 +41,9 @@ impl ProcessTable for ProcFs {
 
 pub fn read_proc(pid: u32, uid_min: u32) -> Option<Proc> {
     let base = format!("/proc/{pid}");
+    // The folder belongs to the process's effective user even when the
+    // program made itself non-dumpable (only the files in it turn root's
+    // then), so a program can't make itself look like a service.
     let uid = fs::metadata(&base).ok()?.uid();
     let exe = fs::read_link(format!("{base}/exe"))
         .ok()?

@@ -39,8 +39,9 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
   around `/etc/hosts`. System services (e.g. systemd-resolved with DNS over TLS) are not affected.
 - **HTTPS filtering** (optional, Settings page): while websites are blocked, your web traffic goes
   through a filter inside the service. It reads the site name of each connection (TLS SNI, or the
-  `Host` of every plain-HTTP request) and refuses blocked sites. Nothing is decrypted and no
-  certificate is installed. It works for any browser or app, including Flatpaks, custom DNS and
+  `Host` of every plain-HTTP request) and refuses blocked sites. Allowed HTTPS connections go to an
+  address of the site they name, so an allowed name can't be sent to a blocked site's server.
+  Nothing is decrypted and no certificate is installed. It works for any browser or app, including Flatpaks, custom DNS and
   direct IP addresses: connections that don't name their site (e.g. HTTPS to a bare IP address)
   are refused. Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while
   filtering so browsers fall back to filterable HTTPS. If the filter can't run, the traffic it
@@ -94,10 +95,10 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
 The other locks stop you from giving up inside DeepWork, but anyone with `sudo` can still stop the
 service. A block with the **Hardcore** lock closes that gap while it runs:
 
-- **No administrator rights for anyone.** A sudoers drop-in denies every `sudo` command (root
-  itself excepted), `doas` gets a `deny` section, polkit asks for root's password for any admin
-  action and refuses `pkexec`, `run0`, `systemctl`, package installs and clock changes outright,
-  and root's password is locked so `su` and root logins fail.
+- **No administrator rights for anyone.** A rule at the end of `/etc/sudoers` denies every `sudo`
+  command (root itself excepted), `doas` gets a `deny` section for everyone it permits, polkit asks
+  for root's password for any admin action and refuses `pkexec`, `run0`, `systemctl`, package
+  installs and clock changes outright, and root's password is locked so `su` and root logins fail.
 - **No tunnels.** Traffic through VPN interfaces (WireGuard, tun, IP-in-IP, GRE) is refused, and the
   *VPNs & proxies* list is always included.
 - **Network protections always on.** Encrypted-DNS blocking and HTTPS filtering are on whatever the

@@ -50,6 +50,19 @@ Fixes for problems found by code scanning:
 - Firefox policies that are changed during a block are kept when it ends (only the website
   filter and encrypted DNS settings are DeepWork's while it runs), and a `policies.json` that
   isn't valid JSON is left alone.
+- Websites added to a block whose settings are protected until a date, while it isn't running, go
+  behind its earlier websites, so they can't push those out of the hosts file's subdomains or
+  Chromium's blocklist when it runs.
+- Closing open connections when a website is added to a running block only closes outgoing web
+  connections (ports 443 and 80), and on Linux only those of people's accounts. Giving a website
+  the address of another machine no longer cuts off root's or a service's connections to it, or
+  SSH and Remote Desktop sessions from it.
+- HTTPS filter: a connection goes to an address of the site it names. Sending an allowed site's
+  name to a blocked site's address no longer reaches the blocked site.
+- Hardcore mode on Linux: the sudo rule now goes at the end of `/etc/sudoers`, after every file it
+  includes, so a file in `/etc/sudoers.d` that sorts later, or a rule after the include, can't
+  grant sudo again. doas is denied to everyone a `permit` rule names, not only to `wheel` and
+  regular accounts.
 
 ## [0.1.0]
 
