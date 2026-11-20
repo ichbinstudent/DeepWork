@@ -4,31 +4,36 @@
 //! which find the original destination with `SO_ORIGINAL_DST`. The site name
 //! is read by [`crate::webfilter`]. Nothing is decrypted. Blocked
 //! connections are closed (HTTPS) or answered with a small block page
-//! (HTTP); everything else is connected and relayed. Plain HTTP is checked
-//! request by request, and goes to the original destination. HTTPS goes
-//! where its site name leads: the name is all the filter sees, so an
-//! allowed name sent to a blocked site's address reaches the allowed site.
+//! (HTTP); everything else is connected to the original destination and
+//! relayed. Plain HTTP is checked request by request. The site name must
+//! lead to the destination (see [`sites`]), and connections are closed when
+//! their site gets blocked.
 //!
 //! The filter fails closed: a connection that doesn't name its site (TLS
 //! without SNI, e.g. to a bare IP address), a request it can't read, and
-//! connections beyond its limit are refused, never passed on unchecked.
+//! connections beyond its limit (also per user, see [`owner`]) are refused,
+//! never passed on unchecked.
+
+mod owner;
+mod sites;
 
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Read, Write};
 use std::mem::MaybeUninit;
 use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6, TcpListener,
-    TcpStream, ToSocketAddrs,
+    TcpStream,
 };
 use std::os::unix::io::AsRawFd;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, RwLock, mpsc};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, mpsc};
 use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
+use self::sites::{Names, ip_literal, local_network};
 use super::netfilter::FilterPorts;
-use crate::webfilter::{HttpGate, Stop, block_page, is_blocked, read_client_hello};
+use crate::webfilter::{HttpGate, Sites, Stop, block_page, is_blocked, read_client_hello};
 
 /// Mark set on the proxy's own outgoing connections so the firewall never
 /// redirects them back to the proxy.
@@ -40,10 +45,6 @@ const HANDSHAKE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(10 * 60);
 /// How often a waiting relay checks whether its connection went idle.
 const POLL: Duration = Duration::from_secs(30);
-/// How long the addresses of a site name are reused.
-const NAME_TTL: Duration = Duration::from_secs(60);
-/// Site names remembered at most; past that the list starts over.
-const NAMES_MAX: usize = 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -56,21 +57,94 @@ struct Shared {
     refused: AtomicU64,
     /// Our own listening ports (connections to them aren't relayed).
     ports: Vec<u16>,
-    /// Connections being handled, and how many may be.
-    active: AtomicUsize,
+    /// Connections being handled, and how many may be: in all, and per user
+    /// ([`Shared::per_user`]).
+    slots: Mutex<Slots>,
     max: usize,
-    names: Mutex<HashMap<String, Lookup>>,
+    names: Names,
+    /// Connections being relayed, by number.
+    relays: Mutex<HashMap<u64, Relayed>>,
+    next_relay: AtomicU64,
 }
 
-/// When a site name was looked up, and its addresses.
-type Lookup = (Instant, Arc<[IpAddr]>);
+#[derive(Default)]
+struct Slots {
+    total: usize,
+    per_user: HashMap<u32, usize>,
+}
+
+/// A relayed connection: the sites it is for, and both of its sockets.
+struct Relayed {
+    hosts: Vec<String>,
+    sockets: [TcpStream; 2],
+}
 
 impl Shared {
+    fn new(ports: Vec<u16>, max: usize) -> Shared {
+        Shared {
+            blocked: RwLock::new(Arc::new(HashSet::new())),
+            refused: AtomicU64::new(0),
+            ports,
+            slots: Mutex::new(Slots::default()),
+            max,
+            names: Names::default(),
+            relays: Mutex::new(HashMap::new()),
+            next_relay: AtomicU64::new(0),
+        }
+    }
+
     fn blocked(&self) -> Arc<HashSet<String>> {
         self.blocked
             .read()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Connections one user may have: most, but never all, so others can
+    /// still browse.
+    fn per_user(&self) -> usize {
+        self.max - self.max / 4
+    }
+
+    fn relays(&self) -> MutexGuard<'_, HashMap<u64, Relayed>> {
+        self.relays.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether a request for `host` may go to `dst`: the name must lead
+    /// there. A bare address only counts for plain HTTP on a local network
+    /// (`by_address`); an HTTPS client always sends a name.
+    fn leads_to(&self, host: &str, dst: IpAddr, by_address: bool) -> bool {
+        match ip_literal(host) {
+            Some(ip) => by_address && ip.to_canonical() == dst.to_canonical() && local_network(dst),
+            None => self.names.has(host, dst),
+        }
+    }
+}
+
+/// The blocked sites, and where a plain-HTTP connection goes.
+struct Route<'a> {
+    shared: &'a Shared,
+    blocked: Arc<HashSet<String>>,
+    dst: IpAddr,
+}
+
+impl<'a> Route<'a> {
+    fn new(shared: &'a Shared, dst: IpAddr) -> Self {
+        Route {
+            shared,
+            blocked: shared.blocked(),
+            dst,
+        }
+    }
+}
+
+impl Sites for Route<'_> {
+    fn blocked(&self, host: &str) -> bool {
+        is_blocked(host, &self.blocked)
+    }
+
+    fn reaches(&self, host: &str) -> bool {
+        self.shared.leads_to(host, self.dst, true)
     }
 }
 
@@ -132,18 +206,14 @@ impl Proxy {
             v4: (v4[0], v4[1]),
             v6: v6.map(|p| (p[0], p[1])),
         };
-        let shared = Arc::new(Shared {
-            blocked: RwLock::new(Arc::new(HashSet::new())),
-            refused: AtomicU64::new(0),
-            ports: listeners
+        let shared = Arc::new(Shared::new(
+            listeners
                 .iter()
                 .filter_map(|(l, _)| l.local_addr().ok())
                 .map(|a| a.port())
                 .collect(),
-            active: AtomicUsize::new(0),
-            max: max_connections(),
-            names: Mutex::new(HashMap::new()),
-        });
+            max_connections(),
+        ));
         for (l, kind) in listeners {
             spawn_acceptor(l, kind, shared.clone());
         }
@@ -155,12 +225,22 @@ impl Proxy {
         self.ports
     }
 
+    /// Also closes the connections being relayed for sites that are
+    /// blocked now: cutting connections by address can miss some.
     pub fn set_blocked(&self, domains: HashSet<String>) {
         *self
             .shared
             .blocked
             .write()
             .unwrap_or_else(|e| e.into_inner()) = Arc::new(domains);
+        let blocked = self.shared.blocked();
+        for relayed in self.shared.relays().values() {
+            if relayed.hosts.iter().any(|h| is_blocked(h, &blocked)) {
+                for s in &relayed.sockets {
+                    let _ = s.shutdown(Shutdown::Both);
+                }
+            }
+        }
     }
 
     pub fn refused(&self) -> u64 {
@@ -168,22 +248,38 @@ impl Proxy {
     }
 }
 
-/// One of the [`Shared::max`] connections; freed when dropped.
-struct Slot(Arc<Shared>);
+/// One of the [`Shared::max`] connections, of a user; freed when dropped.
+struct Slot {
+    shared: Arc<Shared>,
+    uid: u32,
+}
 
 impl Slot {
-    fn take(shared: &Arc<Shared>) -> Option<Slot> {
-        if shared.active.fetch_add(1, Ordering::SeqCst) >= shared.max {
-            shared.active.fetch_sub(1, Ordering::SeqCst);
+    fn take(shared: &Arc<Shared>, uid: u32) -> Option<Slot> {
+        let mut slots = shared.slots.lock().unwrap_or_else(|e| e.into_inner());
+        let mine = slots.per_user.get(&uid).copied().unwrap_or(0);
+        if slots.total >= shared.max || mine >= shared.per_user() {
             return None;
         }
-        Some(Slot(shared.clone()))
+        slots.total += 1;
+        slots.per_user.insert(uid, mine + 1);
+        Some(Slot {
+            shared: shared.clone(),
+            uid,
+        })
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        self.0.active.fetch_sub(1, Ordering::SeqCst);
+        let mut slots = self.shared.slots.lock().unwrap_or_else(|e| e.into_inner());
+        slots.total -= 1;
+        if let Some(n) = slots.per_user.get_mut(&self.uid) {
+            *n -= 1;
+            if *n == 0 {
+                slots.per_user.remove(&self.uid);
+            }
+        }
     }
 }
 
@@ -196,12 +292,21 @@ fn spawn_acceptor(listener: TcpListener, kind: Kind, shared: Arc<Shared>) {
                 std::thread::sleep(Duration::from_millis(50));
                 continue;
             };
-            // Over the limit, the connection is closed: refused, not let through.
-            let Some(slot) = Slot::take(&shared) else {
-                if !warned {
+            let Ok(dst) = original_dst(&conn) else {
+                continue;
+            };
+            // Over the limit (or whose it is unknown), the connection is
+            // closed: refused, not let through.
+            let uid = conn
+                .peer_addr()
+                .ok()
+                .and_then(|from| owner::owner(from, dst));
+            let Some(slot) = uid.and_then(|uid| Slot::take(&shared, uid)) else {
+                if !warned && uid.is_some() {
                     eprintln!(
-                        "deepwork: web filter busy ({} connections), refusing new ones",
-                        shared.max
+                        "deepwork: web filter busy ({} connections, {} per user), refusing new ones",
+                        shared.max,
+                        shared.per_user()
                     );
                     warned = true;
                 }
@@ -211,8 +316,7 @@ fn spawn_acceptor(listener: TcpListener, kind: Kind, shared: Arc<Shared>) {
             let _ = std::thread::Builder::new()
                 .stack_size(256 * 1024)
                 .spawn(move || {
-                    let shared = slot.0.clone();
-                    let _ = handle(conn, kind, &shared);
+                    let _ = handle(conn, kind, dst, &slot.shared);
                     drop(slot);
                 });
         }
@@ -245,9 +349,8 @@ fn refuse(client: &TcpStream, shared: &Shared, page: Option<&str>) {
     let _ = client.shutdown(Shutdown::Both);
 }
 
-fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
+fn handle(client: TcpStream, kind: Kind, dst: SocketAddr, shared: &Shared) -> io::Result<()> {
     client.set_nodelay(true).ok();
-    let dst = original_dst(&client)?;
     if dst.ip().is_loopback() && shared.ports.contains(&dst.port()) {
         return Ok(()); // someone connected to the proxy directly
     }
@@ -264,13 +367,13 @@ fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
                 refuse(&client, shared, None);
                 return Ok(());
             };
-            let Some(target) = upstream(dst, &addresses(shared, &host, dst.port())) else {
+            if !shared.leads_to(&host, dst.ip(), false) {
                 refuse(&client, shared, None);
                 return Ok(());
-            };
-            let upstream = connect_marked(target)?;
+            }
+            let upstream = connect_marked(dst)?;
             (&upstream).write_all(&head)?;
-            relay(client, upstream, None, shared);
+            relay(client, upstream, None, dst.ip(), vec![host], shared);
         }
         Kind::Http => {
             // The first request decides before anything is connected, so a
@@ -283,7 +386,7 @@ fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
                 if n == 0 {
                     return Ok(());
                 }
-                match gate.feed(&buf[..n], &shared.blocked(), &mut out) {
+                match gate.feed(&buf[..n], &Route::new(shared, dst.ip()), &mut out) {
                     Ok(()) => {}
                     Err(Stop::Blocked(host)) => {
                         refuse(&client, shared, Some(&host));
@@ -297,50 +400,11 @@ fn handle(client: TcpStream, kind: Kind, shared: &Shared) -> io::Result<()> {
             }
             let upstream = connect_marked(dst)?;
             (&upstream).write_all(&out)?;
-            relay(client, upstream, Some(gate), shared);
+            let hosts = gate.first_hosts().to_vec();
+            relay(client, upstream, Some(gate), dst.ip(), hosts, shared);
         }
     }
     Ok(())
-}
-
-/// The addresses `host` has (looked up again after [`NAME_TTL`]).
-fn addresses(shared: &Shared, host: &str, port: u16) -> Arc<[IpAddr]> {
-    let names = || shared.names.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some((at, ips)) = names().get(host)
-        && at.elapsed() < NAME_TTL
-    {
-        return ips.clone();
-    }
-    let ips: Arc<[IpAddr]> = (host, port)
-        .to_socket_addrs()
-        .map(|addrs| {
-            addrs
-                .map(|a| a.ip().to_canonical())
-                .filter(|ip| !ip.is_unspecified())
-                .collect()
-        })
-        .unwrap_or_default();
-    if !ips.is_empty() {
-        let mut names = names();
-        if names.len() >= NAMES_MAX {
-            names.clear();
-        }
-        names.insert(host.to_string(), (Instant::now(), ips.clone()));
-    }
-    ips
-}
-
-/// Where an HTTPS connection for a site with addresses `ips` goes: where the
-/// client sent it if that is one of them, otherwise to one of them (of the
-/// same IP version if it has one). None: the name has no address.
-fn upstream(dst: SocketAddr, ips: &[IpAddr]) -> Option<SocketAddr> {
-    if ips.contains(&dst.ip().to_canonical()) {
-        return Some(dst);
-    }
-    ips.iter()
-        .find(|ip| ip.is_ipv4() == dst.is_ipv4())
-        .or(ips.first())
-        .map(|ip| SocketAddr::new(*ip, dst.port()))
 }
 
 /// When either direction of a connection last carried data.
@@ -421,6 +485,7 @@ fn pump_http(
     activity: &Activity,
     gate: &mut HttpGate,
     upgrade: Option<mpsc::Receiver<bool>>,
+    dst: IpAddr,
     shared: &Shared,
 ) -> io::Result<()> {
     let mut buf = vec![0u8; 16 * 1024];
@@ -432,13 +497,13 @@ fn pump_http(
                 .as_ref()
                 .and_then(|rx| rx.recv_timeout(IDLE).ok())
                 .ok_or(io::ErrorKind::TimedOut)?;
-            gate.upgrade_answered(switched, &shared.blocked(), &mut out)
+            gate.upgrade_answered(switched, &Route::new(shared, dst), &mut out)
         } else {
             let n = read_some(client, &mut buf, activity)?;
             if n == 0 {
                 return Ok(());
             }
-            gate.feed(&buf[..n], &shared.blocked(), &mut out)
+            gate.feed(&buf[..n], &Route::new(shared, dst), &mut out)
         };
         (&*upstream).write_all(&out)?;
         if let Err(stop) = result {
@@ -452,7 +517,33 @@ fn pump_http(
     }
 }
 
-fn relay(client: TcpStream, upstream: TcpStream, gate: Option<HttpGate>, shared: &Shared) {
+/// Relays a connection for `hosts` until either side is done, or until one
+/// of the sites gets blocked.
+fn relay(
+    client: TcpStream,
+    upstream: TcpStream,
+    gate: Option<HttpGate>,
+    dst: IpAddr,
+    hosts: Vec<String>,
+    shared: &Shared,
+) {
+    let (Ok(c), Ok(u)) = (client.try_clone(), upstream.try_clone()) else {
+        return;
+    };
+    let id = shared.next_relay.fetch_add(1, Ordering::Relaxed);
+    let _registered = Registered { shared, id };
+    shared.relays().insert(
+        id,
+        Relayed {
+            hosts: hosts.clone(),
+            sockets: [c, u],
+        },
+    );
+    // Blocked since it was checked, before it was registered.
+    let blocked = shared.blocked();
+    if hosts.iter().any(|h| is_blocked(h, &blocked)) {
+        return;
+    }
     for s in [&client, &upstream] {
         let _ = s.set_read_timeout(Some(POLL));
         // A peer that stops reading can't hold the connection forever.
@@ -486,7 +577,15 @@ fn relay(client: TcpStream, upstream: TcpStream, gate: Option<HttpGate>, shared:
         return;
     }
     let result = match gate {
-        Some(mut gate) => pump_http(&client, &upstream, &activity, &mut gate, Some(rx), shared),
+        Some(mut gate) => pump_http(
+            &client,
+            &upstream,
+            &activity,
+            &mut gate,
+            Some(rx),
+            dst,
+            shared,
+        ),
         None => pump(&client, &upstream, &activity, None),
     };
     match result {
@@ -500,6 +599,18 @@ fn relay(client: TcpStream, upstream: TcpStream, gate: Option<HttpGate>, shared:
     }
     if let Ok(t) = back {
         let _ = t.join();
+    }
+}
+
+/// Removes a relayed connection from [`Shared::relays`] when it ends.
+struct Registered<'a> {
+    shared: &'a Shared,
+    id: u64,
+}
+
+impl Drop for Registered<'_> {
+    fn drop(&mut self) {
+        self.shared.relays().remove(&self.id);
     }
 }
 

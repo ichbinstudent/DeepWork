@@ -32,7 +32,8 @@ use crate::state::Daemon;
 /// could have put there: a symlinked target is written in place (keeping the
 /// link) only when its directory belongs to administrators, and is replaced
 /// otherwise. The temporary file is always created new, never opened through
-/// an existing link.
+/// an existing link. A file that is replaced keeps its security label
+/// (SELinux's, on Linux).
 pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) && admin_only(dir) {
@@ -49,6 +50,8 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> 
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut opts, mode);
         let mut f = opts.open(&tmp)?;
+        #[cfg(target_os = "linux")]
+        copy_xattrs(path, &f, LABELS);
         f.write_all(data)?;
         #[cfg(unix)]
         {
@@ -65,6 +68,38 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> std::io::Result<()> 
         let _ = fs::remove_file(&tmp);
         rewrite_in_place(path, data).map_err(|_| e)
     })
+}
+
+/// Extended attributes a replacement takes over from the file it replaces:
+/// security labels, such as SELinux's. `/etc/hosts`, for one, has its own,
+/// which confined services need to read it.
+#[cfg(target_os = "linux")]
+const LABELS: &[&std::ffi::CStr] = &[c"security.selinux", c"security.SMACK64"];
+
+/// Copies these extended attributes of the file at `from` (not following a
+/// link), where it has them, to `to`. Best effort.
+#[cfg(target_os = "linux")]
+fn copy_xattrs(from: &Path, to: &fs::File, names: &[&std::ffi::CStr]) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::io::AsRawFd;
+    let Ok(from) = std::ffi::CString::new(from.as_os_str().as_bytes()) else {
+        return;
+    };
+    let mut buf = [0u8; 1024];
+    for name in names {
+        // SAFETY: nul-terminated strings and a buffer of the size given.
+        unsafe {
+            let n = libc::lgetxattr(
+                from.as_ptr(),
+                name.as_ptr(),
+                buf.as_mut_ptr().cast(),
+                buf.len(),
+            );
+            if let Ok(n) = usize::try_from(n) {
+                libc::fsetxattr(to.as_raw_fd(), name.as_ptr(), buf.as_ptr().cast(), n, 0);
+            }
+        }
+    }
 }
 
 /// Overwrite an existing file without following a symlink at `path`.

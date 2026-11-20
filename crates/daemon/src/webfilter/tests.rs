@@ -195,3 +195,34 @@ fn suffix_matching() {
     assert!(!is_blocked("notreddit.com", &set));
     assert!(!is_blocked("com", &set));
 }
+
+/// A request whose site doesn't lead where the connection goes is refused,
+/// on later requests too.
+#[test]
+fn requests_must_reach_their_site() {
+    struct OnlyExample;
+    impl Sites for OnlyExample {
+        fn blocked(&self, host: &str) -> bool {
+            host == "reddit.com"
+        }
+        fn reaches(&self, host: &str) -> bool {
+            host == "example.org"
+        }
+    }
+    let ok = "GET / HTTP/1.1\r\nHost: example.org\r\n\r\n";
+    let elsewhere = "GET / HTTP/1.1\r\nHost: other.example\r\n\r\n";
+    let mut g = HttpGate::default();
+    let mut out = vec![];
+    g.feed(ok.as_bytes(), &OnlyExample, &mut out).unwrap();
+    assert_eq!(g.first_hosts(), ["example.org"]);
+    let end = g.feed(elsewhere.as_bytes(), &OnlyExample, &mut out);
+    assert_eq!(end, Err(Stop::Invalid));
+    assert_eq!(out, ok.as_bytes());
+    // Absolute form counts too.
+    let mut g = HttpGate::default();
+    let sneaky = "GET http://other.example/ HTTP/1.1\r\nHost: example.org\r\n\r\n";
+    assert_eq!(
+        g.feed(sneaky.as_bytes(), &OnlyExample, &mut vec![]),
+        Err(Stop::Invalid)
+    );
+}
