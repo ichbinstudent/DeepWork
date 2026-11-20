@@ -23,7 +23,9 @@ fn cuts(listen: &str) {
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
 
-    let (closed, error) = cut_where(|remote| remote == server);
+    // Our own connection, found with our process id.
+    let me = std::process::id();
+    let (closed, error) = cut_where(|remote, pid| remote == server && pid == me);
     // CI runs as administrator; elsewhere this may not be possible.
     if error == Some(ERROR_ACCESS_DENIED) && std::env::var_os("CI").is_none() {
         eprintln!("skipped: closing connections needs administrator rights");
@@ -60,4 +62,11 @@ fn ports_are_big_endian() {
     assert_eq!(port(field), 443);
     let s = sockaddr_in6([0; 16], field, 0);
     assert_eq!(&s[2..4], &[0x01, 0xBB]);
+}
+
+#[test]
+fn services_are_not_in_a_session() {
+    // The System process, and a process id that doesn't exist.
+    assert!(!in_session(4));
+    assert!(!in_session(u32::MAX - 2));
 }

@@ -82,3 +82,33 @@ fn writes_never_follow_foreign_links() {
     assert!(!admin_only(Path::new("/tmp")));
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// A replaced file's labels go to the new one (tested with a user
+/// attribute: setting security labels needs root).
+#[cfg(target_os = "linux")]
+#[test]
+fn replacements_keep_labels() {
+    use std::os::unix::ffi::OsStrExt;
+    let dir = std::env::temp_dir().join(format!("dw-labels-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("hosts");
+    fs::write(&old, "old").unwrap();
+    let path = std::ffi::CString::new(old.as_os_str().as_bytes()).unwrap();
+    let name = c"user.deepwork-test";
+    // SAFETY: nul-terminated strings and a buffer of the size given.
+    let set = unsafe { libc::setxattr(path.as_ptr(), name.as_ptr(), b"lbl".as_ptr().cast(), 3, 0) };
+    if set != 0 {
+        eprintln!("skipped: no extended attributes here");
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    let new = fs::File::create(dir.join("new")).unwrap();
+    copy_xattrs(&old, &new, &[name, c"user.not-there"]);
+    let new = std::ffi::CString::new(dir.join("new").as_os_str().as_bytes()).unwrap();
+    let mut buf = [0u8; 16];
+    // SAFETY: as above.
+    let n = unsafe { libc::getxattr(new.as_ptr(), name.as_ptr(), buf.as_mut_ptr().cast(), 16) };
+    assert_eq!(&buf[..usize::try_from(n).unwrap()], b"lbl");
+    let _ = fs::remove_dir_all(&dir);
+}
