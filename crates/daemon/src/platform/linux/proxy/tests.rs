@@ -1,14 +1,11 @@
 use super::*;
 
+const LOCAL: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
 fn shared() -> Arc<Shared> {
-    Arc::new(Shared {
-        blocked: RwLock::new(Arc::new(["reddit.com".to_string()].into())),
-        refused: AtomicU64::new(0),
-        ports: vec![],
-        active: AtomicUsize::new(0),
-        max: 2,
-        names: Mutex::new(HashMap::new()),
-    })
+    let shared = Shared::new(vec![], 4);
+    *shared.blocked.write().unwrap() = Arc::new(["reddit.com".to_string()].into());
+    Arc::new(shared)
 }
 
 /// A connected pair of sockets.
@@ -34,11 +31,14 @@ fn http_relay(first: &str) -> (TcpStream, TcpStream, Arc<Shared>) {
     let (upstream, server) = pair();
     let mut gate = HttpGate::default();
     let mut out = vec![];
-    gate.feed(first.as_bytes(), &shared.blocked(), &mut out)
+    gate.feed(first.as_bytes(), &*shared.blocked(), &mut out)
         .unwrap();
     (&upstream).write_all(&out).unwrap();
     let s = shared.clone();
-    std::thread::spawn(move || relay(client, upstream, Some(gate), &s));
+    let hosts = gate.first_hosts().to_vec();
+    // example.org's requests may go to 127.0.0.1 here.
+    s.names.has_with("example.org", LOCAL, |_| vec![LOCAL]);
+    std::thread::spawn(move || relay(client, upstream, Some(gate), LOCAL, hosts, &s));
     (browser, server, shared)
 }
 
@@ -86,11 +86,124 @@ fn websocket_follows_the_servers_answer() {
 #[test]
 fn connections_beyond_the_limit_are_refused() {
     let shared = shared();
-    let a = Slot::take(&shared).unwrap();
-    let _b = Slot::take(&shared).unwrap();
-    assert!(Slot::take(&shared).is_none());
+    // One user gets 3 of the 4: never all of them.
+    let a = Slot::take(&shared, 1000).unwrap();
+    let _b = Slot::take(&shared, 1000).unwrap();
+    let _c = Slot::take(&shared, 1000).unwrap();
+    assert!(Slot::take(&shared, 1000).is_none());
+    let _d = Slot::take(&shared, 1001).unwrap();
+    assert!(Slot::take(&shared, 1001).is_none());
     drop(a);
-    assert!(Slot::take(&shared).is_some());
+    assert!(Slot::take(&shared, 1000).is_some());
+}
+
+#[test]
+fn finds_whose_a_connection_is() {
+    let table = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:0277 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 1 1
+   1: 0500000A:CB38 0100A8C0:01BB 01 00000000:00000000 00:00000000 00000000  1000        0 2 1
+";
+    let from: SocketAddr = "10.0.0.5:52024".parse().unwrap();
+    let to: SocketAddr = "192.168.0.1:443".parse().unwrap();
+    let other: SocketAddr = "192.168.0.2:443".parse().unwrap();
+    if cfg!(target_endian = "little") {
+        assert_eq!(owner::owner_in(table, from, to), Some(1000));
+        assert_eq!(owner::owner_in(table, from, other), None);
+    }
+
+    // A real connection, over IPv4 and IPv6.
+    let me = unsafe { libc::getuid() };
+    for at in ["127.0.0.1:0", "[::1]:0"] {
+        let Ok(l) = TcpListener::bind(at) else {
+            continue;
+        };
+        let c = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        let found = owner::owner(c.local_addr().unwrap(), c.peer_addr().unwrap());
+        assert_eq!(found, Some(me), "{at}");
+    }
+}
+
+#[test]
+fn names_must_lead_to_the_address() {
+    let names = Names::default();
+    let ip = |s: &str| s.parse::<IpAddr>().unwrap();
+    let lookups = std::cell::Cell::new(0);
+    let resolve = |_: &str| {
+        lookups.set(lookups.get() + 1);
+        vec![ip("192.0.2.1"), ip("2001:db8::1")]
+    };
+    assert!(names.has_with("example.org", ip("192.0.2.1"), resolve));
+    assert!(names.has_with("example.org", ip("::ffff:192.0.2.1"), resolve));
+    assert!(names.has_with("example.org", ip("2001:db8::1"), resolve));
+    assert_eq!(lookups.get(), 1);
+    // Another address: looked up again, but not over and over.
+    assert!(!names.has_with("example.org", ip("198.51.100.7"), resolve));
+    assert!(!names.has_with("example.org", ip("198.51.100.7"), resolve));
+    assert_eq!(lookups.get(), 1);
+
+    let shared = shared();
+    // The system's resolver.
+    assert!(shared.leads_to("localhost", LOCAL, false));
+    assert!(!shared.leads_to("localhost", ip("192.0.2.1"), false));
+    assert!(!shared.leads_to("no-such-name.invalid", ip("192.0.2.1"), false));
+    // Addresses as names: HTTPS never, plain HTTP on a local network only.
+    assert!(!shared.leads_to("192.168.1.1", ip("192.168.1.1"), false));
+    assert!(shared.leads_to("192.168.1.1", ip("192.168.1.1"), true));
+    assert!(shared.leads_to("[fe80::1]", ip("fe80::1"), true));
+    assert!(!shared.leads_to("192.168.1.1", ip("192.168.1.2"), true));
+    assert!(!shared.leads_to("203.0.113.9", ip("203.0.113.9"), true));
+}
+
+#[test]
+fn local_networks() {
+    for local in [
+        "10.1.2.3",
+        "172.16.0.1",
+        "192.168.1.1",
+        "169.254.0.1",
+        "100.100.1.1",
+        "fd00::1",
+        "fe80::1",
+    ] {
+        assert!(sites::local_network(local.parse().unwrap()), "{local}");
+    }
+    for public in ["8.8.8.8", "100.128.0.1", "2001:4860::8888", "203.0.113.9"] {
+        assert!(!sites::local_network(public.parse().unwrap()), "{public}");
+    }
+}
+
+/// A connection is closed when its site gets blocked, wherever it goes.
+#[test]
+fn relays_end_when_their_site_is_blocked() {
+    let shared = shared();
+    let (browser, client) = pair();
+    let (upstream, server) = pair();
+    let s = shared.clone();
+    let done = std::thread::spawn(move || {
+        relay(
+            client,
+            upstream,
+            None,
+            LOCAL,
+            vec!["news.example".into()],
+            &s,
+        )
+    });
+    (&browser).write_all(b"hello").unwrap();
+    let mut buf = [0u8; 5];
+    (&server).read_exact(&mut buf).unwrap();
+    let proxy = Proxy {
+        shared: shared.clone(),
+        ports: FilterPorts {
+            v4: (0, 0),
+            v6: None,
+        },
+    };
+    proxy.set_blocked(["reddit.com".into(), "example".into()].into());
+    done.join().unwrap();
+    assert!(drain(&browser).is_empty());
+    assert!(shared.relays().is_empty());
 }
 
 #[test]
@@ -108,46 +221,4 @@ fn listens_on_free_ports() {
     let taken = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = taken.local_addr().unwrap().port();
     assert!(Proxy::start(port, 0).is_err());
-}
-
-/// The site name is all the filter sees, so an allowed name sent to some
-/// other address (a blocked site's) goes to the allowed site instead.
-#[test]
-fn https_goes_where_the_name_leads() {
-    let addr = |s: &str| s.parse::<SocketAddr>().unwrap();
-    let ip = |s: &str| s.parse::<IpAddr>().unwrap();
-    let site = [ip("192.0.2.1"), ip("192.0.2.2"), ip("2001:db8::1")];
-    // Sent to one of the name's addresses: kept.
-    assert_eq!(
-        upstream(addr("192.0.2.2:443"), &site),
-        Some(addr("192.0.2.2:443"))
-    );
-    assert_eq!(
-        upstream(addr("[2001:db8::1]:443"), &site),
-        Some(addr("[2001:db8::1]:443"))
-    );
-    // Sent elsewhere: to the name's own address, same IP version first.
-    assert_eq!(
-        upstream(addr("198.51.100.9:443"), &site),
-        Some(addr("192.0.2.1:443"))
-    );
-    assert_eq!(
-        upstream(addr("[2001:db8::99]:8443"), &site),
-        Some(addr("[2001:db8::1]:8443"))
-    );
-    assert_eq!(
-        upstream(addr("198.51.100.9:443"), &[ip("2001:db8::1")]),
-        Some(addr("[2001:db8::1]:443"))
-    );
-    // A name without an address is refused.
-    assert_eq!(upstream(addr("198.51.100.9:443"), &[]), None);
-}
-
-#[test]
-fn looks_names_up() {
-    let shared = shared();
-    let ips = addresses(&shared, "localhost", 443);
-    assert!(ips.iter().all(IpAddr::is_loopback) && !ips.is_empty());
-    assert!(addresses(&shared, "no-such-name.invalid", 443).is_empty());
-    assert_eq!(shared.names.lock().unwrap().len(), 1);
 }

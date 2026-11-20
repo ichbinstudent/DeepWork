@@ -39,11 +39,13 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
   around `/etc/hosts`. System services (e.g. systemd-resolved with DNS over TLS) are not affected.
 - **HTTPS filtering** (optional, Settings page): while websites are blocked, your web traffic goes
   through a filter inside the service. It reads the site name of each connection (TLS SNI, or the
-  `Host` of every plain-HTTP request) and refuses blocked sites. Allowed HTTPS connections go to an
-  address of the site they name, so an allowed name can't be sent to a blocked site's server.
-  Nothing is decrypted and no certificate is installed. It works for any browser or app, including Flatpaks, custom DNS and
-  direct IP addresses: connections that don't name their site (e.g. HTTPS to a bare IP address)
-  are refused. Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while
+  `Host` of every plain-HTTP request) and refuses blocked sites. The name must lead to the address
+  the connection goes to, so an allowed name can't be sent to a blocked site's server. Nothing is
+  decrypted and no certificate is installed. It works for any browser or app, including Flatpaks,
+  custom DNS and direct IP addresses: connections that don't name their site (e.g. HTTPS to a bare
+  IP address, or plain HTTP to one outside your local network) are refused, and when a site gets
+  blocked, its open connections through the filter are closed. One user can't take all of the
+  filter's connections. Plain-HTTP requests get a "Blocked by DeepWork" page. HTTP/3 is turned off while
   filtering so browsers fall back to filterable HTTPS. If the filter can't run, the traffic it
   should check is refused, never let through.
 - **App blocking**: blocked apps are closed as soon as they start, for every person's account on
