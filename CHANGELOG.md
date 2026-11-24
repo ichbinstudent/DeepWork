@@ -6,6 +6,8 @@ and versions follow [Semantic Versioning](https://semver.org) (see
 
 ## [Unreleased]
 
+## [0.2.0]
+
 ### Added
 
 - App blocking on Windows: programs and Store apps are closed while a block is on, for every
@@ -125,6 +127,7 @@ First release, in beta.
 - An administrator can always end a block by stopping the service; see the
   [known limitations](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md#known-limitations).
 
-[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ichbinstudent/deepwork/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/ichbinstudent/deepwork/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ichbinstudent/deepwork/releases/tag/v0.1.0

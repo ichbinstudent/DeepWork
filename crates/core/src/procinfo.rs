@@ -77,12 +77,23 @@ pub fn start_menu_rules(target: &str, arguments: &str, id: &str) -> Option<Vec<S
         "chrome_proxy",
         "chrome_pwa_launcher",
         "msedge_proxy",
+        "private_browsing",
         "pwahelper",
         "vivaldi_proxy",
     ];
     // Too common to tell programs apart by.
     const GENERIC: &[&str] = &[
-        "app", "client", "game", "launch", "launcher", "main", "start",
+        "app",
+        "client",
+        "game",
+        "install",
+        "installer",
+        "launch",
+        "launcher",
+        "main",
+        "run",
+        "setup",
+        "start",
     ];
 
     if target.is_empty() {
