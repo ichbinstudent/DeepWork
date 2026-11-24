@@ -358,6 +358,10 @@ fn close_windows_in(session: u32, pids: &[u32]) {
         let mut token: HANDLE = null_mut();
         // Needs SYSTEM. Without it, programs are closed without asking.
         if WTSQueryUserToken(session, &mut token) == 0 {
+            eprintln!(
+                "deepwork: cannot ask programs in session {session} to close: {}",
+                std::io::Error::last_os_error()
+            );
             return;
         }
         let token = OwnedHandle::from_raw_handle(token as RawHandle);
