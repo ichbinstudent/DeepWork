@@ -145,7 +145,7 @@ $running = Start-Pinger 'blockme'
 $keep = Start-Pinger 'keepme'
 for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
 Write-Host "window shown: $(Test-Path $shown), after $i s; has a window: $((Get-Process -Id $open.Id).MainWindowHandle)"
-query session
+try { query session } catch { Write-Host 'query session is not available' }
 Start-Sleep -Seconds 12
 Check (-not $open.HasExited -and -not $running.HasExited) 'the test programs run'
 $out = Ctl add Apps app:blockme app:windowed.exe
