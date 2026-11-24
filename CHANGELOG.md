@@ -6,6 +6,15 @@ and versions follow [Semantic Versioning](https://semver.org) (see
 
 ## [Unreleased]
 
+## [0.1.1]
+
+Security fixes, and smoother scrolling on Windows. Please update.
+
+### Fixed
+
+- Windows: scrolling and animations could stutter, because the app's frames were timed with
+  Windows' coarse 15.6 ms timer. The app now asks for a 1 ms timer.
+
 ### Security
 
 Fixes for problems found by code scanning:
@@ -107,5 +116,6 @@ First release, in beta.
 - An administrator can always end a block by stopping the service; see the
   [known limitations](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md#known-limitations).
 
-[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/ichbinstudent/deepwork/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ichbinstudent/deepwork/releases/tag/v0.1.0

@@ -44,6 +44,11 @@
     <control>keyboard</control>
   </supports>
   <releases>
+    <release version="0.1.1" date="2026-11-24">
+      <description>
+        <p>Security fixes, and smoother scrolling on Windows.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-11-18">
       <description>
         <p>First release, in beta.</p>
