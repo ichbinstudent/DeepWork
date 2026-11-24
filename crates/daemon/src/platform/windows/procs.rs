@@ -21,7 +21,9 @@ use windows_sys::Win32::Foundation::{
     ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, UNICODE_STRING,
 };
 use windows_sys::Win32::Security::{
-    GetTokenInformation, SECURITY_MAX_SID_SIZE, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    DuplicateTokenEx, GetTokenInformation, SECURITY_MAX_SID_SIZE, SecurityImpersonation,
+    TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_ELEVATION, TOKEN_QUERY, TOKEN_USER,
+    TokenElevation, TokenPrimary, TokenUser,
 };
 use windows_sys::Win32::Storage::Packaging::Appx::GetPackageFamilyName;
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
@@ -83,7 +85,8 @@ impl ProcessTable for Processes {
 
     fn terminate(&self, processes: &[Proc], force: bool) {
         let now = now();
-        let mut ask: HashMap<u32, Vec<u32>> = HashMap::new();
+        // By session, and whether they run elevated.
+        let mut ask: HashMap<(u32, bool), (Vec<u32>, Option<OwnedHandle>)> = HashMap::new();
         for p in processes {
             // Keeps the pid from being reused meanwhile.
             let Some(handle) = open(p.pid, PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION)
@@ -97,14 +100,17 @@ impl ProcessTable for Processes {
                 && now.saturating_sub(p.start_time) > YOUNG
                 && let Some(session) = session_of(p.pid)
             {
-                ask.entry(session).or_default().push(p.pid);
+                let token = elevated_token(&handle);
+                let (pids, with) = ask.entry((session, token.is_some())).or_default();
+                pids.push(p.pid);
+                *with = with.take().or(token);
                 continue;
             }
             // SAFETY: a process handle with the right to terminate it.
             unsafe { TerminateProcess(handle.as_raw_handle() as HANDLE, 1) };
         }
-        for (session, pids) in ask {
-            close_windows_in(session, &pids);
+        for ((session, _), (pids, token)) in ask {
+            close_windows_in(session, &pids, token);
         }
     }
 }
@@ -333,8 +339,50 @@ fn belongs_to_system(exe: &str) -> bool {
 
 // ------------------------------------------------------------------ closing windows
 
-/// Ask processes of a session to close, in that session.
-fn close_windows_in(session: u32, pids: &[u32]) {
+/// A copy of an elevated process's token, `None` if it isn't elevated.
+fn elevated_token(process: &OwnedHandle) -> Option<OwnedHandle> {
+    // SAFETY: valid handles and out pointers; every handle is closed.
+    unsafe {
+        let mut token: HANDLE = null_mut();
+        if OpenProcessToken(
+            process.as_raw_handle() as HANDLE,
+            TOKEN_QUERY | TOKEN_DUPLICATE,
+            &mut token,
+        ) == 0
+        {
+            return None;
+        }
+        let token = OwnedHandle::from_raw_handle(token as RawHandle);
+        let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+        let mut len = 0;
+        if GetTokenInformation(
+            token.as_raw_handle() as HANDLE,
+            TokenElevation,
+            (&raw mut elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut len,
+        ) == 0
+            || elevation.TokenIsElevated == 0
+        {
+            return None;
+        }
+        let mut copy: HANDLE = null_mut();
+        (DuplicateTokenEx(
+            token.as_raw_handle() as HANDLE,
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY,
+            null(),
+            SecurityImpersonation,
+            TokenPrimary,
+            &mut copy,
+        ) != 0)
+            .then(|| OwnedHandle::from_raw_handle(copy as RawHandle))
+    }
+}
+
+/// Ask processes of a session to close, in that session: with the rights of
+/// `token` (elevated programs' windows only take messages from elevated
+/// programs), otherwise those of the person signed in there.
+fn close_windows_in(session: u32, pids: &[u32], token: Option<OwnedHandle>) {
     // SAFETY: no preconditions.
     if session_of(unsafe { GetCurrentProcessId() }) == Some(session) {
         close_windows(pids);
@@ -355,16 +403,21 @@ fn close_windows_in(session: u32, pids: &[u32]) {
     // SAFETY: valid NUL-terminated strings and out pointers, all alive
     // during the calls; every handle is closed.
     unsafe {
-        let mut token: HANDLE = null_mut();
-        // Needs SYSTEM. Without it, programs are closed without asking.
-        if WTSQueryUserToken(session, &mut token) == 0 {
-            eprintln!(
-                "deepwork: cannot ask programs in session {session} to close: {}",
-                std::io::Error::last_os_error()
-            );
-            return;
-        }
-        let token = OwnedHandle::from_raw_handle(token as RawHandle);
+        let token = match token {
+            Some(token) => token,
+            None => {
+                let mut token: HANDLE = null_mut();
+                // Needs SYSTEM. Without it, programs are closed without asking.
+                if WTSQueryUserToken(session, &mut token) == 0 {
+                    eprintln!(
+                        "deepwork: cannot ask programs in session {session} to close: {}",
+                        std::io::Error::last_os_error()
+                    );
+                    return;
+                }
+                OwnedHandle::from_raw_handle(token as RawHandle)
+            }
+        };
         let mut startup: STARTUPINFOW = zeroed();
         startup.cb = size_of::<STARTUPINFOW>() as u32;
         startup.lpDesktop = desktop.as_mut_ptr();

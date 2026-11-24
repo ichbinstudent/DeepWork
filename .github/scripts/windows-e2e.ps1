@@ -141,6 +141,9 @@ Add-Type -AssemblyName System.Windows.Forms
 "@ | Set-Content $window
 Copy-Item "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" "$apps\windowed.exe"
 $open = Start-Process "$apps\windowed.exe" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$window`"" -PassThru
+$uac = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')
+Write-Host "UAC: $uac, administrator: $admin"
 $running = Start-Pinger 'blockme'
 $keep = Start-Pinger 'keepme'
 for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
