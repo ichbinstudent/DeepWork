@@ -109,9 +109,15 @@ impl Killer {
             if p.pid <= 1 || p.pid == self.own_pid || p.privileged {
                 continue;
             }
+            // Elsewhere users choose the app id themselves.
+            let package = if cfg!(windows) {
+                p.app_id.as_deref()
+            } else {
+                None
+            };
             if p.system_exe
                 && (is_protected_process(basename(&p.exe))
-                    || p.app_id.as_deref().is_some_and(is_protected_process))
+                    || package.is_some_and(is_protected_process))
             {
                 continue;
             }

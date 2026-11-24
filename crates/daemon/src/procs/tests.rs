@@ -113,6 +113,11 @@ fn protected_names_cant_be_borrowed() {
             p(20, SHELL, "/usr/lib/jvm/bin/java", true),
             // a copy of the game named like a shell
             p(21, SHELL, &format!("/home/a/.local/bin/{SHELL}"), false),
+            // an installed game started under the app id "bash"
+            Proc {
+                app_id: Some(if cfg!(windows) { "x" } else { SHELL }.into()),
+                ..p(23, "game", "/usr/bin/game", true)
+            },
             // a real shell whose command line happens to match
             p(22, SHELL, &format!("/usr/bin/{SHELL}"), true),
         ],
@@ -124,5 +129,8 @@ fn protected_names_cant_be_borrowed() {
         "Games".to_string(),
     )];
     k.enforce(&rules);
-    assert_eq!(*log.lock().unwrap(), vec![(20, false), (21, false)]);
+    assert_eq!(
+        *log.lock().unwrap(),
+        vec![(20, false), (21, false), (23, false)]
+    );
 }
