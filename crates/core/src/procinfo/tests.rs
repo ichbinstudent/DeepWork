@@ -58,6 +58,10 @@ fn start_menu_entries() {
     ] {
         assert_eq!(rules("", "", shell), None, "{shell}");
     }
+    assert_eq!(
+        rules("", "", "Microsoft.Windows.Photos_8wekyb3d8bbwe!App"),
+        some("Microsoft.Windows.Photos_8wekyb3d8bbwe")
+    );
     assert_eq!(rules("", "", "Microsoft.Windows.Explorer"), None);
     assert_eq!(rules("", "", r"{GUID}\a_b.exe"), None);
 }

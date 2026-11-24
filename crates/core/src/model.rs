@@ -427,12 +427,10 @@ pub fn is_protected_process(name: &str) -> bool {
     PROTECTED.contains(&n) || PROTECTED_HERE.contains(&n) || (cfg!(windows) && is_shell_package(n))
 }
 
-/// Packages that hold parts of Windows' desktop (Start menu, search, input).
+/// Packages that are parts of Windows (Start menu, search, Settings): their
+/// family names end in its publisher id.
 pub(crate) fn is_shell_package(family: &str) -> bool {
-    let family = family.to_lowercase();
-    ["microsoftwindows.", "microsoft.windows."]
-        .iter()
-        .any(|p| family.starts_with(p))
+    family.to_lowercase().ends_with("_cw5n1h2txyewy")
 }
 
 /// Prefix for rules that match a substring of a process's full command line,

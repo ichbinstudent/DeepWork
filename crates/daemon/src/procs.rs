@@ -109,11 +109,10 @@ impl Killer {
             if p.pid <= 1 || p.pid == self.own_pid || p.privileged {
                 continue;
             }
-            if p.system_exe && is_protected_process(basename(&p.exe)) {
-                continue;
-            }
-            // Packages are signed, so nobody else can use their names.
-            if cfg!(windows) && p.app_id.as_deref().is_some_and(is_protected_process) {
+            if p.system_exe
+                && (is_protected_process(basename(&p.exe))
+                    || p.app_id.as_deref().is_some_and(is_protected_process))
+            {
                 continue;
             }
             let Some((rule, block)) = rules.iter().find(|(r, _)| matches(r, &p)) else {

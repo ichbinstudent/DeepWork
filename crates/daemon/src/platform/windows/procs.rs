@@ -203,7 +203,10 @@ fn describe(process: &OwnedHandle, pid: u32, name: String, start: u64) -> Proc {
     let cmdline = cmdline(process).unwrap_or_default();
     // Only matters for names that are protected.
     let file = exe.rsplit('\\').next().unwrap_or_default();
-    let system_exe = is_protected_process(file) && belongs_to_system(&exe);
+    let package = package_family(process);
+    let protected =
+        is_protected_process(file) || package.as_deref().is_some_and(is_protected_process);
+    let system_exe = protected && belongs_to_system(&exe);
     Proc {
         pid,
         privileged: false,
@@ -211,7 +214,7 @@ fn describe(process: &OwnedHandle, pid: u32, name: String, start: u64) -> Proc {
         system_exe,
         argv0: first_argument(&cmdline).to_string(),
         cmdline,
-        app_id: package_family(process),
+        app_id: package,
         start_time: start,
         exe,
     }
