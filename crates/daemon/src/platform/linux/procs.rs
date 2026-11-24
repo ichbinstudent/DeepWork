@@ -33,9 +33,12 @@ impl ProcessTable for ProcFs {
             .collect()
     }
 
-    fn terminate(&self, pid: u32, force: bool) {
+    fn terminate(&self, processes: &[Proc], force: bool) {
         let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
-        unsafe { libc::kill(pid as libc::pid_t, sig) };
+        for p in processes {
+            // SAFETY: plain system call.
+            unsafe { libc::kill(p.pid as libc::pid_t, sig) };
+        }
     }
 }
 

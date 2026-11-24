@@ -113,8 +113,17 @@ fn cmd_rules() {
 
 #[test]
 fn protected_apps_are_rejected() {
-    assert!(normalize_app("bash").is_err());
-    assert!(normalize_app("/usr/bin/gnome-shell").is_err());
+    assert!(normalize_app("deepwork").is_err());
+    if cfg!(windows) {
+        assert!(normalize_app("Explorer.exe").is_err());
+        assert!(normalize_app(r"C:\Windows\System32\cmd.exe").is_err());
+    } else {
+        assert!(normalize_app("bash").is_err());
+    }
+    if cfg!(target_os = "linux") {
+        assert!(normalize_app("/usr/bin/gnome-shell").is_err());
+    }
+    assert_eq!(normalize_app("C:/Games/x.exe").unwrap(), r"C:\Games\x.exe");
     assert!(normalize_app("dir/thing").is_err());
     assert_eq!(normalize_app(" Discord ").unwrap(), "Discord");
 }

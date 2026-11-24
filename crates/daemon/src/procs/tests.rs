@@ -39,6 +39,10 @@ fn rule_matching() {
         r"C:\Users\a\AppData\Local\Discord\app-1.0\Discord.exe",
         &win
     ));
+    assert!(matches(
+        r"c:\users\A\appdata\local\discord\app-1.0\discord.exe",
+        &win
+    ));
     assert!(!matches("discord.ex", &win));
 }
 
@@ -51,8 +55,9 @@ impl ProcessTable for Fake {
     fn list(&self) -> Vec<Proc> {
         self.0.clone()
     }
-    fn terminate(&self, pid: u32, force: bool) {
-        self.1.lock().unwrap().push((pid, force));
+    fn terminate(&self, processes: &[Proc], force: bool) {
+        let mut log = self.1.lock().unwrap();
+        log.extend(processes.iter().map(|p| (p.pid, force)));
     }
 }
 
@@ -72,14 +77,14 @@ fn killer_spares_privileged_and_protected() {
         vec![
             p(10, "steam", false),
             p(11, "steam", true),
-            p(12, "gnome-shell", false),
+            p(12, "deepwork", false),
         ],
         log.clone(),
     );
     let mut k = Killer::new(Box::new(table));
     let rules = [
         ("steam".to_string(), "Games".to_string()),
-        ("gnome-shell".to_string(), "X".to_string()),
+        ("deepwork".to_string(), "X".to_string()),
     ];
     let reported = k.enforce(&rules);
     assert_eq!(reported, vec![("steam".to_string(), "Games".to_string())]);
@@ -91,6 +96,7 @@ fn killer_spares_privileged_and_protected() {
 /// on a copy a user made.
 #[test]
 fn protected_names_cant_be_borrowed() {
+    const SHELL: &str = if cfg!(windows) { "cmd" } else { "bash" };
     let p = |pid, comm: &str, exe: &str, system_exe| Proc {
         pid,
         comm: comm.into(),
@@ -104,11 +110,11 @@ fn protected_names_cant_be_borrowed() {
     let table = Fake(
         vec![
             // renamed itself with prctl(PR_SET_NAME)
-            p(20, "bash", "/usr/lib/jvm/bin/java", true),
+            p(20, SHELL, "/usr/lib/jvm/bin/java", true),
             // a copy of the game named like a shell
-            p(21, "bash", "/home/a/.local/bin/bash", false),
+            p(21, SHELL, &format!("/home/a/.local/bin/{SHELL}"), false),
             // a real shell whose command line happens to match
-            p(22, "bash", "/usr/bin/bash", true),
+            p(22, SHELL, &format!("/usr/bin/{SHELL}"), true),
         ],
         log.clone(),
     );
