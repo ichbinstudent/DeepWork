@@ -87,7 +87,9 @@ fn describes_and_closes_processes() {
     assert_eq!(p.exe, "/bin/sleep");
     assert_eq!(p.cmdline, "/bin/sleep 60");
     assert!(!p.privileged);
-    assert!(table.list().iter().any(|p| p.pid == 1 && p.privileged));
+    // Root's processes are only visible to root.
+    let launchd = table.list().into_iter().find(|p| p.pid == 1);
+    assert!(launchd.is_none_or(|p| p.privileged));
     // Not if it's another process by now.
     let other = Proc {
         start_time: 1,

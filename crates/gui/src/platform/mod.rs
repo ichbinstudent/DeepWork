@@ -11,6 +11,7 @@
 
 #[cfg(not(windows))]
 mod gio_apps;
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))] // no tray there
 pub mod tray_menu;
 
 #[cfg(target_os = "linux")]
