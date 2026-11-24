@@ -153,6 +153,44 @@ fn names_must_lead_to_the_address() {
     assert!(shared.leads_to("[fe80::1]", ip("fe80::1"), true));
     assert!(!shared.leads_to("192.168.1.1", ip("192.168.1.2"), true));
     assert!(!shared.leads_to("203.0.113.9", ip("203.0.113.9"), true));
+    // Nor in the other spellings the system's resolver takes.
+    for other in ["2130706433", "0x7f000001", "127.1", "0177.0.0.1"] {
+        for by_address in [false, true] {
+            assert!(!shared.leads_to(other, LOCAL, by_address), "{other}");
+        }
+    }
+}
+
+#[test]
+fn host_names_and_addresses() {
+    for name in [
+        "example.com",
+        "example.com.",
+        "localhost",
+        "a_b.example.com",
+        "xn--bcher-kva.example",
+        "1.example",
+        "4chan.org",
+        "0xabc.example",
+        "1e100.net",
+    ] {
+        assert!(sites::is_name(name), "{name}");
+    }
+    for address in [
+        "",
+        ".",
+        "16843009",
+        "0x1010101",
+        "0x",
+        "1.65793",
+        "example.1",
+        "1.1.1.1.",
+        "fe80::1%eth0",
+        "[fe80::1%25eth0]",
+        "a b.example",
+    ] {
+        assert!(!sites::is_name(address), "{address}");
+    }
 }
 
 #[test]

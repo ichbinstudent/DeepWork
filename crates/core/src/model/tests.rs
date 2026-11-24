@@ -383,3 +383,24 @@ fn random_text_uses_alphabet() {
     assert_eq!(t.len(), 50);
     assert!(t.bytes().all(|c| RANDOM_ALPHABET.contains(&c)));
 }
+
+/// Once pinned, a thread keeps to one zone, whatever the system's is.
+#[test]
+fn a_pinned_zone_is_used_for_schedules() {
+    let now = 1_750_000_000.0;
+    let other = fixed_zone(utc_offset(&system_zone(), now) + 8 * 3600);
+    let m = minute_of_week_in(now, &other) as u32;
+    let there = Block::new(BlockConfig {
+        schedule: vec![[m.saturating_sub(30), m + 30]],
+        schedule_enabled: true,
+        ..Default::default()
+    });
+    std::thread::spawn(move || {
+        assert!(!there.in_window(now));
+        pin_zone(other);
+        assert!(there.in_window(now));
+        assert_eq!(minute_of_week(now) as u32, m);
+    })
+    .join()
+    .unwrap();
+}

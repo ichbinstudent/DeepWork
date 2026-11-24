@@ -40,7 +40,8 @@ Fixes for problems found by code scanning:
   name while the service wasn't running no longer gets block passwords, and the service keeps
   enforcing blocks instead of failing to start.
 - Changing the time zone and then, before the service noticed, deleting a scheduled block or
-  turning its schedule off no longer gets around its lock.
+  turning its schedule off no longer gets around its lock Neither does changing it while
+  the service is handling a request.
 - Changing the breaks of a locked block (or adding schedule time before a running window) no
   longer jumps straight into a break: a new break rhythm starts with focus.
 - After 5 wrong passwords in a row for a block, everyone has to wait between guesses, from 5
@@ -60,7 +61,7 @@ Fixes for problems found by code scanning:
 - Files the service replaces, such as `/etc/hosts` and `/etc/sudoers`, keep their SELinux label.
 - HTTPS filter: a site name must lead to the address the connection goes to (by the system's DNS),
   for HTTPS and plain HTTP alike. Sending an allowed site's name (or an address in place of a
-  name) to a blocked site's server no longer reaches the blocked site, and the filter never
+  name, however it is written) to a blocked site's server no longer reaches the blocked site, and the filter never
   connects anywhere the program didn't, so it can't be used to get past the firewall's
   encrypted-DNS and VPN rules. Plain HTTP by address only works for local networks (routers,
   printers). Connections through the filter are closed as soon as their site gets blocked, and one
