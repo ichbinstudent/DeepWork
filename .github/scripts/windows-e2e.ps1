@@ -130,19 +130,27 @@ function Start-Pinger([string]$name) {
 # A window that says in a file when it is asked to close.
 $asked = Join-Path $apps 'asked.txt'
 $shown = Join-Path $apps 'shown.txt'
-$window = Join-Path $apps 'window.ps1'
+# Not a console program: closing its console would end it without asking.
+$source = Join-Path $apps 'windowed.cs'
 @"
-Add-Type -AssemblyName System.Windows.Forms
-`$f = New-Object System.Windows.Forms.Form
-`$f.Text = 'deepwork-e2e-window'
-`$f.add_Shown({ Set-Content '$shown' 'shown' })
-`$f.add_FormClosing({ Set-Content '$asked' 'asked' })
-[System.Windows.Forms.Application]::Run(`$f)
-"@ | Set-Content $window
-Copy-Item "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" "$apps\windowed.exe"
+using System;
+using System.IO;
+using System.Windows.Forms;
+static class Program {
+    [STAThread]
+    static void Main(string[] args) {
+        var f = new Form { Text = "deepwork-e2e-window" };
+        f.Shown += (s, e) => File.WriteAllText(args[0], "shown");
+        f.FormClosing += (s, e) => File.WriteAllText(args[1], "asked");
+        Application.Run(f);
+    }
+}
+"@ | Set-Content $source
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "Add-Type -Path '$source' -ReferencedAssemblies System.Windows.Forms -OutputAssembly '$apps\windowed.exe' -OutputType WindowsApplication"
+Check (Test-Path "$apps\windowed.exe") 'the window program is built'
 function Start-Window {
     Remove-Item $shown, $asked -ErrorAction SilentlyContinue
-    $p = Start-Process "$apps\windowed.exe" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$window`"" -PassThru
+    $p = Start-Process "$apps\windowed.exe" -ArgumentList "`"$shown`"", "`"$asked`"" -PassThru
     for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
     Write-Host "window shown: $(Test-Path $shown), after $i s"
     $p
