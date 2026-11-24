@@ -54,7 +54,7 @@ and the service refuses it.
   available yet.
 - The installer isn't code-signed yet, so Windows SmartScreen warns about it.
 - Locks only stop standard users: an administrator can stop the DeepWork service.
-- Programs that were open when a block starts are asked to close, and closed after 3 seconds if
+- Programs that were open when a block starts are asked to close, and closed after 10 seconds if
   they don't; unsaved work in them is lost.
 - Web apps that Chrome or Edge installed run in the browser, so they can't be blocked as apps
   (block their website instead).

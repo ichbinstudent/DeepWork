@@ -140,20 +140,31 @@ Add-Type -AssemblyName System.Windows.Forms
 [System.Windows.Forms.Application]::Run(`$f)
 "@ | Set-Content $window
 Copy-Item "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" "$apps\windowed.exe"
-$open = Start-Process "$apps\windowed.exe" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$window`"" -PassThru
+function Start-Window {
+    Remove-Item $shown, $asked -ErrorAction SilentlyContinue
+    $p = Start-Process "$apps\windowed.exe" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$window`"" -PassThru
+    for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
+    Write-Host "window shown: $(Test-Path $shown), after $i s"
+    $p
+}
+# The service's helper for asking, by itself.
+$open = Start-Window
+$took = Measure-Command { & "$dir\deepwork-daemon.exe" --close-windows $open.Id | Out-Host }
+Write-Host "the helper took $([int]$took.TotalMilliseconds) ms"
+Check ($open.WaitForExit(10000)) 'the helper closes a window'
+Check (Test-Path $asked) 'it asks'
+$open = Start-Window
 $uac = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA
 $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')
 Write-Host "UAC: $uac, administrator: $admin"
 $running = Start-Pinger 'blockme'
 $keep = Start-Pinger 'keepme'
-for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
-Write-Host "window shown: $(Test-Path $shown), after $i s; has a window: $((Get-Process -Id $open.Id).MainWindowHandle)"
 try { query session } catch { Write-Host 'query session is not available' }
 Start-Sleep -Seconds 12
 Check (-not $open.HasExited -and -not $running.HasExited) 'the test programs run'
 $out = Ctl add Apps app:blockme app:windowed.exe
 Ctl start Apps 5 | Out-Null
-Check ($running.WaitForExit(15000)) 'a running program is closed'
+Check ($running.WaitForExit(20000)) 'a running program is closed'
 Check ($open.WaitForExit(15000)) 'a program with a window is closed'
 Check (Test-Path $asked) 'it was asked to close first'
 $again = Start-Pinger 'blockme'

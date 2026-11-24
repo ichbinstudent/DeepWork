@@ -127,7 +127,7 @@ impl Killer {
             seen.insert(p.pid);
             match self.pending.get(&p.pid) {
                 Some((at, st)) if *st == p.start_time => {
-                    if at.elapsed() > Duration::from_secs(3) {
+                    if at.elapsed() > self.table.grace() {
                         kill.push(p);
                     }
                 }

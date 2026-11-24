@@ -13,12 +13,14 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle, RawHandle};
 use std::ptr::{null, null_mut};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use windows_sys::Wdk::System::Threading::{
     NtQueryInformationProcess, ProcessCommandLineInformation,
 };
 use windows_sys::Win32::Foundation::{
-    ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM, UNICODE_STRING,
+    ERROR_INSUFFICIENT_BUFFER, FILETIME, HANDLE, HWND, INVALID_HANDLE_VALUE, LPARAM,
+    UNICODE_STRING, WAIT_OBJECT_0,
 };
 use windows_sys::Win32::Security::{
     DuplicateTokenEx, GetTokenInformation, SECURITY_MAX_SID_SIZE, SecurityImpersonation,
@@ -32,9 +34,10 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::{
 use windows_sys::Win32::System::RemoteDesktop::{ProcessIdToSessionId, WTSQueryUserToken};
 use windows_sys::Win32::System::SystemInformation::GetSystemTimeAsFileTime;
 use windows_sys::Win32::System::Threading::{
-    CREATE_NO_WINDOW, CreateProcessAsUserW, GetCurrentProcessId, GetProcessTimes, OpenProcess,
-    OpenProcessToken, PROCESS_INFORMATION, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
-    PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTUPINFOW, TerminateProcess,
+    CREATE_NO_WINDOW, CreateProcessAsUserW, GetCurrentProcessId, GetExitCodeProcess,
+    GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_INFORMATION, PROCESS_NAME_WIN32,
+    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW, STARTUPINFOW,
+    TerminateProcess, WaitForSingleObject,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnumChildWindows, EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW,
@@ -54,6 +57,8 @@ pub const CLOSE_WINDOWS: &str = "--close-windows";
 /// A program younger than this (in 100 ns, as in FILETIME) has nothing to
 /// save yet and is closed right away.
 const YOUNG: u64 = 10 * 10_000_000;
+
+const GRACE: Duration = Duration::from_secs(10);
 
 /// The processes seen last time (pid to what it is), so only new ones are
 /// looked at closely.
@@ -81,6 +86,11 @@ impl ProcessTable for Processes {
         }
         *known = now;
         known.values().cloned().collect()
+    }
+
+    /// Enough to answer "save changes?".
+    fn grace(&self) -> Duration {
+        GRACE
     }
 
     fn terminate(&self, processes: &[Proc], force: bool) {
@@ -442,8 +452,29 @@ fn close_windows_in(session: u32, pids: &[u32], token: Option<OwnedHandle>) {
             );
             return;
         }
-        drop(OwnedHandle::from_raw_handle(info.hProcess as RawHandle));
         drop(OwnedHandle::from_raw_handle(info.hThread as RawHandle));
+        let helper = OwnedHandle::from_raw_handle(info.hProcess as RawHandle);
+        std::thread::spawn(move || watch(&helper));
+    }
+}
+
+/// Report it when asking programs to close fails, or takes so long that they
+/// don't get much time for it.
+fn watch(helper: &OwnedHandle) {
+    let asked = Instant::now();
+    let h = helper.as_raw_handle() as HANDLE;
+    // SAFETY: a valid process handle and out pointer.
+    let (done, code) = unsafe {
+        let done = WaitForSingleObject(h, GRACE.as_millis() as u32) == WAIT_OBJECT_0;
+        let mut code = 0;
+        GetExitCodeProcess(h, &mut code);
+        (done, code)
+    };
+    let took = asked.elapsed().as_secs_f64();
+    if !done {
+        eprintln!("deepwork: asking programs to close takes more than {took:.1} s");
+    } else if code != 0 || took > 2.0 {
+        eprintln!("deepwork: asking programs to close took {took:.1} s (exit code {code:#x})");
     }
 }
 
@@ -454,26 +485,34 @@ pub fn close_windows_command(pids: Option<String>) {
         .split(',')
         .filter_map(|p| p.parse().ok())
         .collect();
-    close_windows(&pids);
+    println!("asked {} windows to close", close_windows(&pids));
 }
 
 /// Ask every window of these processes to close, like a click on its close
-/// button.
-fn close_windows(pids: &[u32]) {
-    let pids: HashSet<u32> = pids.iter().copied().collect();
-    unsafe extern "system" fn each(window: HWND, pids: LPARAM) -> i32 {
+/// button. Returns how many were asked.
+fn close_windows(pids: &[u32]) -> usize {
+    struct Asked {
+        pids: HashSet<u32>,
+        windows: usize,
+    }
+    unsafe extern "system" fn each(window: HWND, asked: LPARAM) -> i32 {
         // SAFETY: the pointer passed to EnumWindows below.
-        let pids = unsafe { &*(pids as *const HashSet<u32>) };
+        let Asked { pids, windows } = unsafe { &mut *(asked as *mut Asked) };
         // SAFETY: windows may be gone by now, which these calls handle.
         unsafe {
             if IsWindowVisible(window) != 0 && (belongs(window, pids) || hosts(window, pids)) {
-                PostMessageW(window, WM_CLOSE, 0, 0);
+                *windows += usize::from(PostMessageW(window, WM_CLOSE, 0, 0) != 0);
             }
         }
         1
     }
+    let mut asked = Asked {
+        pids: pids.iter().copied().collect(),
+        windows: 0,
+    };
     // SAFETY: the callback only uses the pointer during the call.
-    unsafe { EnumWindows(Some(each), &raw const pids as LPARAM) };
+    unsafe { EnumWindows(Some(each), &raw mut asked as LPARAM) };
+    asked.windows
 }
 
 fn belongs(window: HWND, pids: &HashSet<u32>) -> bool {

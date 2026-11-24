@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use deepwork_core::protocol::{Capabilities, NetStatus};
 
@@ -80,6 +81,10 @@ pub trait System: Send {
 /// portable (see [`crate::procs`]).
 pub trait ProcessTable: Send {
     fn list(&self) -> Vec<Proc>;
+    /// How long a process gets between being asked and being killed.
+    fn grace(&self) -> Duration {
+        Duration::from_secs(3)
+    }
     /// Ask processes (as [`ProcessTable::list`] gave them) to quit
     /// (`force = false`) or kill them (`force = true`).
     fn terminate(&self, processes: &[Proc], force: bool);
