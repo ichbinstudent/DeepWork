@@ -54,16 +54,20 @@ pub fn serve(
     let allowed = Arc::new(allowed);
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        let Some(slot) = Slot::take() else { continue };
+        let Some(caller) = peer_uid(&stream).map(|uid| match uid {
+            0 => Caller::Admin,
+            uid => Caller::Uid(uid),
+        }) else {
+            continue;
+        };
+        let Some(slot) = Slot::take(&caller) else {
+            continue;
+        };
         let daemon = daemon.clone();
         let allowed = allowed.clone();
         std::thread::spawn(move || {
             let _slot = slot;
-            let caller = peer_uid(&stream).map(|uid| match uid {
-                0 => Caller::Admin,
-                uid => Caller::Uid(uid),
-            });
-            let ok = permitted(caller.as_ref(), allowed.as_deref());
+            let ok = permitted(Some(&caller), allowed.as_deref());
             stream.set_read_timeout(Some(Duration::from_secs(60))).ok();
             let Ok(writer) = stream.try_clone() else {
                 return;

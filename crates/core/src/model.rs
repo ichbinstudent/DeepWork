@@ -4,6 +4,7 @@
 //! explicitly so it can be unit-tested. The daemon owns the only mutable copy
 //! of the state; the GUI only ever sees [`crate::protocol::BlockStatus`].
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rand::Rng;
@@ -517,9 +518,28 @@ pub fn weakening_reasons(
 
 pub use jiff::tz::TimeZone;
 
-/// The system's time zone, which schedules follow.
+/// The system's time zone, as it is now.
 pub fn system_zone() -> TimeZone {
     TimeZone::system()
+}
+
+thread_local! {
+    static PINNED_ZONE: RefCell<Option<TimeZone>> = const { RefCell::new(None) };
+}
+
+/// Make this thread use `zone` for schedules and dates from now on. The
+/// system's zone can change between two looks at it, so the service looks
+/// once and decides everything about a request in that zone.
+pub fn pin_zone(zone: TimeZone) {
+    PINNED_ZONE.set(Some(zone));
+}
+
+/// The time zone schedules follow: the one pinned on this thread, otherwise
+/// the system's.
+fn current_zone() -> TimeZone {
+    PINNED_ZONE
+        .with_borrow(Clone::clone)
+        .unwrap_or_else(system_zone)
 }
 
 /// How many seconds `zone` is ahead of UTC at `ts`.
@@ -538,9 +558,9 @@ pub fn zones_differ(a: &TimeZone, b: &TimeZone, ts: f64) -> bool {
     utc_offset(a, ts) != utc_offset(b, ts)
 }
 
-/// A Unix timestamp in the system's time zone.
+/// A Unix timestamp in the time zone schedules follow.
 pub fn local_time(ts: f64) -> Option<jiff::ZonedDateTime> {
-    local_time_in(ts, &TimeZone::system())
+    local_time_in(ts, &current_zone())
 }
 
 fn local_time_in(ts: f64, zone: &TimeZone) -> Option<jiff::ZonedDateTime> {
@@ -549,7 +569,7 @@ fn local_time_in(ts: f64, zone: &TimeZone) -> Option<jiff::ZonedDateTime> {
 }
 
 pub fn minute_of_week(ts: f64) -> f64 {
-    minute_of_week_in(ts, &TimeZone::system())
+    minute_of_week_in(ts, &current_zone())
 }
 
 pub fn minute_of_week_in(ts: f64, zone: &TimeZone) -> f64 {
@@ -572,7 +592,7 @@ pub fn today_key(ts: f64) -> String {
 /// Ranges that touch across the Sunday→Monday wrap count as one window. A
 /// schedule covering the whole week reports a rolling one-week horizon.
 pub fn schedule_window(ranges: &[[u32; 2]], now: f64) -> Option<(f64, f64)> {
-    schedule_window_in(ranges, now, &TimeZone::system())
+    schedule_window_in(ranges, now, &current_zone())
 }
 
 /// [`schedule_window`] in the given time zone.
@@ -680,7 +700,7 @@ impl Block {
     }
 
     pub fn sched_window(&self, now: f64) -> Option<(f64, f64)> {
-        self.sched_window_in(now, &TimeZone::system())
+        self.sched_window_in(now, &current_zone())
     }
 
     /// [`Block::sched_window`] as if the system were in another time zone.

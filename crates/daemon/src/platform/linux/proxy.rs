@@ -31,7 +31,7 @@ use std::time::{Duration, Instant};
 
 use socket2::{Domain, Protocol, SockAddr, Socket, Type};
 
-use self::sites::{Names, ip_literal, local_network};
+use self::sites::{Names, ip_literal, is_name, local_network};
 use super::netfilter::FilterPorts;
 use crate::webfilter::{HttpGate, Sites, Stop, block_page, is_blocked, read_client_hello};
 
@@ -116,7 +116,7 @@ impl Shared {
     fn leads_to(&self, host: &str, dst: IpAddr, by_address: bool) -> bool {
         match ip_literal(host) {
             Some(ip) => by_address && ip.to_canonical() == dst.to_canonical() && local_network(dst),
-            None => self.names.has(host, dst),
+            None => is_name(host) && self.names.has(host, dst),
         }
     }
 }

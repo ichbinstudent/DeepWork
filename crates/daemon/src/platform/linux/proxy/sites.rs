@@ -93,6 +93,23 @@ pub fn ip_literal(host: &str) -> Option<IpAddr> {
     bare.parse().ok()
 }
 
+/// Whether `host` is an ordinary host name. Resolvers also take addresses in
+/// other spellings (`16843009`, `0x1010101` and `1.65793` are 1.1.1.1,
+/// `fe80::1%eth0` has a scope) and "resolve" them, so they would count as
+/// names leading to any server. As in browsers, a name whose last label is a
+/// number is an address.
+pub fn is_name(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    let last = host.rsplit('.').next().unwrap_or(host);
+    let hex = last.strip_prefix("0x").or(last.strip_prefix("0X"));
+    let number = last.bytes().all(|b| b.is_ascii_digit())
+        || hex.is_some_and(|h| h.bytes().all(|b| b.is_ascii_hexdigit()));
+    !number
+        && host
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
 /// An address on a local network (private, link-local, or carrier-grade
 /// NAT as VPNs like Tailscale use): a router's or a printer's page, reached
 /// by address, and never a website's.

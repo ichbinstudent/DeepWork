@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use deepwork_core::format_time;
 use deepwork_core::model::{
     Block, BlockConfig, DAY, HARDCORE_BREAK, LockKind, MAX_HARDCORE_SECONDS, Settings, TimeZone,
-    WEEK_MINUTES, hash_password, random_text, schedule_minutes, settings_weakening, system_zone,
-    today_key, validate_config, verify_password, weakening_reasons, zones_differ,
+    WEEK_MINUTES, hash_password, pin_zone, random_text, schedule_minutes, settings_weakening,
+    system_zone, today_key, validate_config, verify_password, weakening_reasons, zones_differ,
 };
 use deepwork_core::protocol::{
     BlockStatus, Capabilities, DayStats, Event, HardcoreStatus, NetStatus, Request, Response,
@@ -423,9 +423,6 @@ impl Daemon {
         ))
     }
 
-    /// Notice a change of the system's time zone. Requests do this too, before
-    /// they look at any schedule: a lock check in the new zone must not come
-    /// before the running windows of the old one are kept.
     /// Numbers the websites of locked blocks in the order they were first
     /// locked, and forgets those no locked block has any more (see
     /// [`Plan::priority`]). A block protected until a date counts while it
@@ -460,8 +457,14 @@ impl Daemon {
         }
     }
 
+    /// Notice a change of the system's time zone. Requests do this too, before
+    /// they look at any schedule: a lock check in the new zone must not come
+    /// before the running windows of the old one are kept.
+    /// Everything after it goes by the zone seen here, even if the system's
+    /// changes in between.
     fn follow_zone(&mut self, now: f64) {
         let zone = system_zone();
+        pin_zone(zone.clone());
         if let Some(old) = self.zone.replace(zone.clone())
             && zones_differ(&old, &zone, now)
         {
