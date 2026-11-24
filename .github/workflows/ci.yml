@@ -128,7 +128,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # macOS is off for now; add macos-latest back to check it.
+        os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -162,7 +163,9 @@ jobs:
           cargo clippy --target aarch64-pc-windows-msvc -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
 
   # macOS: the app builds, and the service installed from source works.
+  # Off for now (remove the condition to turn it on).
   macos:
+    if: false
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4

@@ -8,7 +8,7 @@
 | **Linux** | x86_64 with systemd, GTK 4.14+ and libadwaita 1.7+ | Tested on Arch/CachyOS. Expected to work on Debian 13+, Ubuntu 25.04+, Fedora 42+ and current rolling distributions. |
 | **Linux desktops** | GNOME, KDE Plasma, and others with StatusNotifierItem tray support | On GNOME the tray icon needs the AppIndicator extension; without it the app still works, it just quits when its window closes. |
 | **Browsers** | Chrome, Edge, Brave, Chromium, Vivaldi (Linux), Firefox | Every browser is covered by the hosts file. The Chromium family also gets an enterprise URL blocklist, and Firefox gets a policy file at its next start. |
-| **Experimental** | macOS | Built from source with `macos/install.sh`; no download yet. The service is tested automatically on a macOS runner, the app only builds. |
+| **Experimental** | macOS | Built from source with `macos/install.sh`; no download yet. Not tested: it compiles, but it may not work. |
 | **Not supported** | Linux on ARM (aarch64), 32-bit systems | aarch64 Linux can be built from source but isn't tested. |
 
 Immutable Linux distributions (Fedora Atomic, SteamOS, Bazzite) aren't supported by the install

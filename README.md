@@ -202,7 +202,7 @@ them out.
 
 ### macOS (experimental)
 
-There is no download for macOS yet. `macos/install.sh` builds DeepWork from source (with
+macOS isn't tested yet, and there is no download for it. `macos/install.sh` builds DeepWork from source (with
 [Rust](https://rustup.rs), and for the app `brew install gtk4 libadwaita pkgconf`) and starts its
 service, which blocks websites (hosts file, Firefox policies) and closes blocked apps. What else
 works: [docs/PLATFORMS.md](docs/PLATFORMS.md#features-per-platform). To remove it, run

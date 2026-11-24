@@ -12,8 +12,8 @@ and versions follow [Semantic Versioning](https://semver.org) (see
   person's account (never services). Programs that were open already are asked to close first, so
   they can save. The app picker lists the Start menu's apps with their icons, and those that are
   running.
-- App blocking on macOS (experimental, built from source): apps by name, path or bundle id.
-  `macos/install.sh` installs the service; there is no download yet.
+- App blocking on macOS (experimental and untested, built from source): apps by name, path or
+  bundle id. `macos/install.sh` installs the service; there is no download yet.
 - Filter lists: Windows and macOS apps.
 - `deepworkctl add` takes apps: `deepworkctl add Games app:steam`.
 
