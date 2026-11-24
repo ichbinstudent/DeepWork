@@ -50,7 +50,9 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
   should check is refused, never let through.
 - **App blocking**: blocked apps are closed as soon as they start, for every person's account on
   the computer (never root's or system services'). You can match an app by process
-  name, executable path, or desktop/Flatpak app id. A picker lists installed and running apps.
+  name, executable path, desktop/Flatpak app id, package family name (Windows Store apps) or
+  bundle id (macOS). A picker lists installed and running apps. On Windows, programs that were open
+  already are asked to close first.
   `cmd:<text>` rules match the full command line, e.g. `cmd:net.minecraft.client.main.Main` catches
   Minecraft whichever launcher started it.
 - **Filter lists**: 15 ready-made lists of websites *and* apps:
@@ -89,7 +91,7 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
 - **Notifications** when an app is blocked or a block starts or ends.
 - **Clock-change protection**: changing the system clock doesn't end blocks early.
 - **CLI**: `deepworkctl status | start <block> <min> | stop <block> | unlock <block> | freeze <min> | locked`,
-  and `deepworkctl add <name> [--lock none|random|strict] <site|list:ID>… | delete <block> | lists` to
+  and `deepworkctl add <name> [--lock none|random|strict] <site|list:ID|app:NAME>… | delete <block> | lists` to
   manage blocks without the app.
 
 ## Hardcore mode
@@ -194,8 +196,17 @@ blocks. To update, run the newer installer; your blocks, statistics and running 
 Installing an older version over a newer one is refused (uninstall first).
 
 On Windows, DeepWork blocks websites through the hosts file and browser policies (Chrome, Edge, Brave
-and Firefox), so proxy and VPN extensions in those browsers don't get around a block. App blocking,
-Freeze, the network filter and the hardcore lock aren't available yet; the app leaves them out.
+and Firefox), so proxy and VPN extensions in those browsers don't get around a block. Blocked apps
+are closed. Freeze, the network filter and the hardcore lock aren't available yet; the app leaves
+them out.
+
+### macOS (experimental)
+
+There is no download for macOS yet. `macos/install.sh` builds DeepWork from source (with
+[Rust](https://rustup.rs), and for the app `brew install gtk4 libadwaita pkgconf`) and starts its
+service, which blocks websites (hosts file, Firefox policies) and closes blocked apps. What else
+works: [docs/PLATFORMS.md](docs/PLATFORMS.md#features-per-platform). To remove it, run
+`/Library/DeepWork/uninstall.sh`.
 Everything also works from the command line:
 
 ```powershell

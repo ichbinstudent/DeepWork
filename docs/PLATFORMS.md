@@ -8,7 +8,8 @@
 | **Linux** | x86_64 with systemd, GTK 4.14+ and libadwaita 1.7+ | Tested on Arch/CachyOS. Expected to work on Debian 13+, Ubuntu 25.04+, Fedora 42+ and current rolling distributions. |
 | **Linux desktops** | GNOME, KDE Plasma, and others with StatusNotifierItem tray support | On GNOME the tray icon needs the AppIndicator extension; without it the app still works, it just quits when its window closes. |
 | **Browsers** | Chrome, Edge, Brave, Chromium, Vivaldi (Linux), Firefox | Every browser is covered by the hosts file. The Chromium family also gets an enterprise URL blocklist, and Firefox gets a policy file at its next start. |
-| **Not supported** | macOS, Linux on ARM (aarch64), 32-bit systems | aarch64 Linux can be built from source but isn't tested. The macOS code compiles but has never run. |
+| **Experimental** | macOS | Built from source with `macos/install.sh`; no download yet. The service is tested automatically on a macOS runner, the app only builds. |
+| **Not supported** | Linux on ARM (aarch64), 32-bit systems | aarch64 Linux can be built from source but isn't tested. |
 
 Immutable Linux distributions (Fedora Atomic, SteamOS, Bazzite) aren't supported by the install
 script: it writes to `/usr/local` and `/etc`. Flatpak, Snap and AppImage can't install a system
@@ -19,19 +20,19 @@ service, so DeepWork isn't offered in those formats.
 The service reports what it can do on each system. The app hides or disables everything else,
 and the service refuses it.
 
-| Feature | Linux | Windows |
-| --- | --- | --- |
-| Website blocking (hosts file) | ✅ | ✅ |
-| Cutting off sites that are already open | ✅ | ✅ |
-| Browser policies (URL blocklist, secure DNS off) | ✅ | ✅ |
-| App blocking | ✅ | — |
-| Encrypted DNS blocking, HTTPS filter, VPN blocking | ✅ | — |
-| Freeze (lock the screen) | ✅ | — |
-| Locks: random text, password, strict, protected settings | ✅ | ✅ |
-| *Until restart* lock | ✅ | — |
-| Hardcore lock | ✅ | — |
-| Tray icon | ✅ | ✅ |
-| Running-app picker | ✅ | — |
+| Feature | Linux | Windows | macOS |
+| --- | --- | --- | --- |
+| Website blocking (hosts file) | ✅ | ✅ | ✅ |
+| Cutting off sites that are already open | ✅ | ✅ | — |
+| Browser policies (URL blocklist, secure DNS off) | ✅ | ✅ | Firefox only |
+| App blocking | ✅ | ✅ | ✅ |
+| Encrypted DNS blocking, HTTPS filter, VPN blocking | ✅ | — | — |
+| Freeze (lock the screen) | ✅ | — | — |
+| Locks: random text, password, strict, protected settings | ✅ | ✅ | ✅ |
+| *Until restart* lock | ✅ | — | ✅ |
+| Hardcore lock | ✅ | — | — |
+| Tray icon | ✅ | ✅ | — |
+| Running-app picker | ✅ | ✅ | — |
 
 ### Known limitations
 
@@ -50,10 +51,14 @@ and the service refuses it.
   doesn't end a scheduled block that is running, but later scheduled times move with it.
 
 **Windows:**
-- App blocking, Freeze, the network protections, the *Until restart* lock and hardcore mode aren't
+- Freeze, the network protections, the *Until restart* lock and hardcore mode aren't
   available yet.
 - The installer isn't code-signed yet, so Windows SmartScreen warns about it.
 - Locks only stop standard users: an administrator can stop the DeepWork service.
+- Programs that were open when a block starts are asked to close, and closed after 3 seconds if
+  they don't; unsaved work in them is lost. Programs running as administrator can't be asked.
+- Web apps that Chrome or Edge installed run in the browser, so they can't be blocked as apps
+  (block their website instead).
 
 **Linux:**
 - Hardcore mode removes administrator rights through sudo, doas, polkit and the root password.
