@@ -7,7 +7,7 @@ fn capabilities_follow_the_pieces() {
         state_dir: "/nonexistent/state".into(),
         sandbox: true,
         force_net: false,
-        filter_uid_min: 1000,
+        filter_uid_min: DEFAULT_UID_MIN,
         filter_ports: (41443, 41080),
     };
     let caps = unsupported(&opts).capabilities();

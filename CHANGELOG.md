@@ -6,6 +6,17 @@ and versions follow [Semantic Versioning](https://semver.org) (see
 
 ## [Unreleased]
 
+## [0.2.0]
+
+### Added
+
+- App blocking on Windows: programs and Store apps are closed while a block is on, for every
+  person's account (never services). Programs that were open already are asked to close first, so
+  they can save. The app picker lists the Start menu's apps with their icons, and those that are
+  running.
+- Filter lists: Windows apps.
+- `deepworkctl add` takes apps: `deepworkctl add Games app:steam`.
+
 ## [0.1.1]
 
 Security fixes, and smoother scrolling on Windows. Please update.
@@ -116,6 +127,7 @@ First release, in beta.
 - An administrator can always end a block by stopping the service; see the
   [known limitations](https://github.com/ichbinstudent/deepwork/blob/main/docs/PLATFORMS.md#known-limitations).
 
-[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ichbinstudent/deepwork/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ichbinstudent/deepwork/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/ichbinstudent/deepwork/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/ichbinstudent/deepwork/releases/tag/v0.1.0

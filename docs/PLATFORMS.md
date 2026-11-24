@@ -24,14 +24,14 @@ and the service refuses it.
 | Website blocking (hosts file) | ✅ | ✅ |
 | Cutting off sites that are already open | ✅ | ✅ |
 | Browser policies (URL blocklist, secure DNS off) | ✅ | ✅ |
-| App blocking | ✅ | — |
+| App blocking | ✅ | ✅ |
 | Encrypted DNS blocking, HTTPS filter, VPN blocking | ✅ | — |
 | Freeze (lock the screen) | ✅ | — |
 | Locks: random text, password, strict, protected settings | ✅ | ✅ |
 | *Until restart* lock | ✅ | — |
 | Hardcore lock | ✅ | — |
 | Tray icon | ✅ | ✅ |
-| Running-app picker | ✅ | — |
+| Running-app picker | ✅ | ✅ |
 
 ### Known limitations
 
@@ -50,10 +50,14 @@ and the service refuses it.
   doesn't end a scheduled block that is running, but later scheduled times move with it.
 
 **Windows:**
-- App blocking, Freeze, the network protections, the *Until restart* lock and hardcore mode aren't
+- Freeze, the network protections, the *Until restart* lock and hardcore mode aren't
   available yet.
 - The installer isn't code-signed yet, so Windows SmartScreen warns about it.
 - Locks only stop standard users: an administrator can stop the DeepWork service.
+- Programs that were open when a block starts are asked to close, and closed after 10 seconds if
+  they don't; unsaved work in them is lost.
+- Web apps that Chrome or Edge installed run in the browser, so they can't be blocked as apps
+  (block their website instead).
 
 **Linux:**
 - Hardcore mode removes administrator rights through sudo, doas, polkit and the root password.

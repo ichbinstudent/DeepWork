@@ -1,14 +1,10 @@
 //! Windows: website blocking through the hosts file and
 //! browser policies (Chrome, Edge, Brave and Chromium in the registry,
 //! Firefox's `policies.json`), closing open connections to blocked sites,
-//! and the named pipe the app and `deepworkctl` talk to. It runs as the
+//! closing apps ([`procs`]), and the named pipe the app and `deepworkctl` talk to. It runs as the
 //! `DeepWork` Windows service ([`service`]), installed by `windows/deepwork.iss`.
 //!
 //! Still to do, roughly in order:
-//! - a tray icon for the app.
-//! - apps ([`ProcessTable`](super::ProcessTable)): Toolhelp32 snapshots,
-//!   `QueryFullProcessImageNameW`, `TerminateProcess`; Store apps by
-//!   package family name.
 //! - freeze: `LockWorkStation` from a helper in the user's session.
 //! - boot id: `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters\BootId`.
 //! - network ([`NetGuard`](super::NetGuard)): Windows Filtering Platform for
@@ -25,6 +21,7 @@ use crate::browser::{Layout, PolicyStore};
 mod acl;
 mod chromium;
 mod pipe;
+pub mod procs;
 pub mod service;
 mod tcp;
 pub use pipe::serve;
@@ -79,7 +76,7 @@ pub fn platform(opts: &Options) -> Platform {
                 &[r"C:\Program Files\Mozilla Firefox\firefox.exe"],
             )),
         }),
-        processes: None,
+        processes: Some(Box::new(procs::Processes::default())),
         net: None,
         admin: None,
     }

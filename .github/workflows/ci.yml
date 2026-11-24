@@ -128,8 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is off while the repository is private (its runners use
-        # minutes 10x as fast). Add macos-latest back to re-enable it.
+        # macOS is off for now (see the branch macos-app-blocking).
         os: [windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
@@ -156,8 +155,7 @@ jobs:
             }
           }
           if ($bad) { exit 1 }
-      # Windows on ARM: compile-checked from the x64 runner (ARM runners
-      # are only free for public repositories).
+      # Windows on ARM: compile-checked from the x64 runner.
       - name: Clippy (Windows on ARM)
         if: runner.os == 'Windows'
         run: |

@@ -46,6 +46,15 @@ fn same_name(a: &str, b: &str) -> bool {
     strip(a) == strip(b)
 }
 
+/// Windows paths (`C:\...`) and macOS's don't care about case.
+fn same_path(a: &str, b: &str) -> bool {
+    if b.starts_with('/') && !cfg!(target_os = "macos") {
+        a == b
+    } else {
+        a.to_lowercase() == b.to_lowercase()
+    }
+}
+
 fn is_path(rule: &str) -> bool {
     rule.starts_with('/') || rule.get(1..3) == Some(":\\")
 }
@@ -55,7 +64,7 @@ pub fn matches(rule: &str, p: &Proc) -> bool {
         return !needle.is_empty() && p.cmdline.to_lowercase().contains(&needle.to_lowercase());
     }
     if is_path(rule) {
-        return p.exe == rule || p.argv0 == rule;
+        return [&p.exe, &p.argv0].iter().any(|path| same_path(path, rule));
     }
     let r = rule.to_lowercase();
     let comm = p.comm.to_lowercase();
@@ -95,11 +104,21 @@ impl Killer {
         }
         let mut seen = HashSet::new();
         let mut report = Vec::new();
+        let (mut quit, mut kill) = (vec![], vec![]);
         for p in self.table.list() {
             if p.pid <= 1 || p.pid == self.own_pid || p.privileged {
                 continue;
             }
-            if p.system_exe && is_protected_process(basename(&p.exe)) {
+            // Elsewhere users choose the app id themselves.
+            let package = if cfg!(windows) {
+                p.app_id.as_deref()
+            } else {
+                None
+            };
+            if p.system_exe
+                && (is_protected_process(basename(&p.exe))
+                    || package.is_some_and(is_protected_process))
+            {
                 continue;
             }
             let Some((rule, block)) = rules.iter().find(|(r, _)| matches(r, &p)) else {
@@ -108,12 +127,11 @@ impl Killer {
             seen.insert(p.pid);
             match self.pending.get(&p.pid) {
                 Some((at, st)) if *st == p.start_time => {
-                    if at.elapsed() > Duration::from_secs(3) {
-                        self.table.terminate(p.pid, true);
+                    if at.elapsed() > self.table.grace() {
+                        kill.push(p);
                     }
                 }
                 _ => {
-                    self.table.terminate(p.pid, false);
                     self.pending.insert(p.pid, (Instant::now(), p.start_time));
                     let key = rule.to_lowercase();
                     let recent = self
@@ -124,7 +142,13 @@ impl Killer {
                         self.last_report.insert(key, Instant::now());
                         report.push((display_name(rule, &p), block.clone()));
                     }
+                    quit.push(p);
                 }
+            }
+        }
+        for (processes, force) in [(quit, false), (kill, true)] {
+            if !processes.is_empty() {
+                self.table.terminate(&processes, force);
             }
         }
         self.pending.retain(|pid, _| seen.contains(pid));

@@ -248,11 +248,12 @@ fn usage() -> ! {
          --socket PATH         listen on PATH instead of the default socket\n  \
          --net                 manage the firewall and HTTPS filter even in the sandbox\n  \
          --filter-uid-min N    lowest uid of a person's account: only their processes are\n                        \
-       network-filtered or closed by app blocks (default 1000)\n  \
+       network-filtered or closed by app blocks (default {uid_min})\n  \
          --proxy-ports T,H     ports of the HTTPS and HTTP filter (default: any free ports)\n  \
          --cleanup             remove blocks from the hosts file, browser policies and the firewall,\n                        \
        and give administrator rights back (hardcore mode), then exit\n  \
-         --allow-user ID       let a user control DeepWork (a uid, or a SID on Windows), then exit"
+         --allow-user ID       let a user control DeepWork (a uid, or a SID on Windows), then exit",
+        uid_min = platform::DEFAULT_UID_MIN
     );
     std::process::exit(2)
 }
@@ -265,6 +266,12 @@ fn main() {
             eprintln!("deepwork: cannot run as a service: {e}");
             std::process::exit(1);
         }
+        return;
+    }
+    // Started by the service in a person's session.
+    #[cfg(windows)]
+    if std::env::args().nth(1).as_deref() == Some(platform::windows::procs::CLOSE_WINDOWS) {
+        platform::windows::procs::close_windows_command(std::env::args().nth(2));
         return;
     }
     run();
@@ -319,7 +326,7 @@ fn run() {
         state_dir: defaults.state_dir,
         sandbox: false,
         force_net: false,
-        filter_uid_min: 1000,
+        filter_uid_min: platform::DEFAULT_UID_MIN,
         filter_ports: (0, 0),
     };
     let mut config_path = defaults.config;

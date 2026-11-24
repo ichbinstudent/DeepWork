@@ -386,7 +386,19 @@ fn debug_hooks(ctx: &Rc<Ctx>) {
             (Ok("edit"), Some(b)) => crate::editor::open(&ctx2, Some(&b)),
             (Ok("start"), Some(b)) => crate::dialogs::start(&ctx2, &b),
             (Ok("unlock"), Some(b)) => crate::dialogs::unlock(&ctx2, &b),
-            (Ok("apps"), _) => crate::dialogs::choose_app(&ctx2, |_| {}),
+            (Ok("apps"), _) => {
+                for (kind, apps) in [
+                    ("installed", crate::apps::installed()),
+                    ("running", crate::apps::running()),
+                ] {
+                    let list: Vec<String> = apps
+                        .iter()
+                        .map(|a| format!("{} [{}]", a.name, a.detail))
+                        .collect();
+                    eprintln!("{kind} apps ({}): {}", list.len(), list.join("; "));
+                }
+                crate::dialogs::choose_app(&ctx2, |_| {});
+            }
             (Ok("lists"), Some(b)) => {
                 crate::dialogs::choose_lists(&ctx2, b.config.lists.clone(), vec![], |_| {})
             }

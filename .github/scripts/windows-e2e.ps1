@@ -118,6 +118,72 @@ Check ((Get-Acl $data).Owner -match 'Administrators|S-1-5-32-544') 'data folder 
 Check ((Get-Content "$data\deepwork.log" -Raw) -match 'service started') 'the service writes a readable log'
 Check ((Get-Content "$data\state\state.json" -Raw) -match 'example.com') 'administrators can read the state'
 
+# Apps: closed while a block is on, asked to close first if they were open
+# for a while, and other programs left alone.
+Write-Host "test runs in session $((Get-Process -Id $PID).SessionId)"
+$apps = Join-Path $env:RUNNER_TEMP 'apps'
+New-Item -ItemType Directory -Force $apps | Out-Null
+foreach ($name in 'blockme', 'keepme') { Copy-Item "$env:SystemRoot\System32\PING.EXE" "$apps\$name.exe" }
+function Start-Pinger([string]$name) {
+    Start-Process "$apps\$name.exe" -ArgumentList '-n', '600', '127.0.0.1' -WindowStyle Hidden -PassThru
+}
+# A window that says in a file when it is asked to close.
+$asked = Join-Path $apps 'asked.txt'
+$shown = Join-Path $apps 'shown.txt'
+# Not a console program: closing its console would end it without asking.
+$source = Join-Path $apps 'windowed.cs'
+@"
+using System;
+using System.IO;
+using System.Windows.Forms;
+static class Program {
+    [STAThread]
+    static void Main(string[] args) {
+        var f = new Form { Text = "deepwork-e2e-window" };
+        f.Shown += (s, e) => File.WriteAllText(args[0], "shown");
+        f.FormClosing += (s, e) => File.WriteAllText(args[1], "asked");
+        Application.Run(f);
+    }
+}
+"@ | Set-Content $source
+& "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "Add-Type -Path '$source' -ReferencedAssemblies System.Windows.Forms -OutputAssembly '$apps\windowed.exe' -OutputType WindowsApplication"
+Check (Test-Path "$apps\windowed.exe") 'the window program is built'
+function Start-Window {
+    Remove-Item $shown, $asked -ErrorAction SilentlyContinue
+    $p = Start-Process "$apps\windowed.exe" -ArgumentList "`"$shown`"", "`"$asked`"" -PassThru
+    for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
+    Write-Host "window shown: $(Test-Path $shown), after $i s"
+    $p
+}
+# The service's helper for asking, by itself.
+$open = Start-Window
+$took = Measure-Command { & "$dir\deepwork-daemon.exe" --close-windows $open.Id | Out-Host }
+Write-Host "the helper took $([int]$took.TotalMilliseconds) ms"
+Check ($open.WaitForExit(10000)) 'the helper closes a window'
+Check (Test-Path $asked) 'it asks'
+$open = Start-Window
+$uac = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System').EnableLUA
+$admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole('Administrators')
+Write-Host "UAC: $uac, administrator: $admin"
+$running = Start-Pinger 'blockme'
+$keep = Start-Pinger 'keepme'
+try { query session } catch { Write-Host 'query session is not available' }
+Start-Sleep -Seconds 12
+Check (-not $open.HasExited -and -not $running.HasExited) 'the test programs run'
+$out = Ctl add Apps app:blockme app:windowed.exe
+Ctl start Apps 5 | Out-Null
+Check ($running.WaitForExit(20000)) 'a running program is closed'
+Check ($open.WaitForExit(15000)) 'a program with a window is closed'
+Check (Test-Path $asked) 'it was asked to close first'
+$again = Start-Pinger 'blockme'
+Check ($again.WaitForExit(5000)) 'a blocked program is closed when it starts'
+Check (-not $keep.HasExited) 'another program keeps running'
+Ctl stop Apps | Out-Null
+$after = Start-Pinger 'blockme'
+Start-Sleep -Seconds 5
+Check (-not $after.HasExited) 'the program runs after the block'
+Stop-Process -Id $after.Id, $keep.Id -Force
+
 # Microsoft Defender, where the runner has it running: nothing of ours is
 # flagged, and it leaves the blocks in the hosts file alone.
 $defender = Get-MpComputerStatus -ErrorAction SilentlyContinue
@@ -164,6 +230,23 @@ foreach ($page in 'focus', 'blocks', 'settings') {
     }
 }
 Remove-Item Env:DEEPWORK_DEBUG_PAGE, Env:DEEPWORK_DEBUG_SHOT, Env:DEEPWORK_DEBUG_SIZE
+
+# The app picker.
+$env:DEEPWORK_DEBUG_OPEN = 'apps'
+$env:DEEPWORK_DEBUG_SHOT = Join-Path $shots 'apps.png'
+$log = Join-Path $shots 'apps.log'
+$notepad = Start-Process notepad.exe -PassThru
+Start-Sleep -Seconds 3
+$p = Start-Process (Join-Path $dir 'deepwork.exe') -PassThru -RedirectStandardError $log -RedirectStandardOutput "$log.out"
+Check ($p.WaitForExit(60000)) 'the app picker opens'
+Get-Content $log
+$text = Get-Content $log -Raw
+Check ($text -match 'installed apps \((\d+)\)' -and [int]$Matches[1] -ge 5) 'it lists installed apps'
+if ($env:RUNNER_ARCH -ne 'ARM64') {
+    Check ($text -match 'running apps \(\d+\):.*notepad') 'it lists running apps'
+}
+Stop-Process -Name notepad -Force -ErrorAction SilentlyContinue
+Remove-Item Env:DEEPWORK_DEBUG_OPEN, Env:DEEPWORK_DEBUG_SHOT
 
 # Frame rate with Windows' default timer and with the 1 ms timer the app asks
 # for (informational: the runners have no GPU and no real display).

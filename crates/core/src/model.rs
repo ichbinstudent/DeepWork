@@ -15,7 +15,12 @@ pub const WEEK_MINUTES: u32 = 7 * 24 * 60;
 pub const DAY: f64 = 86_400.0;
 
 /// Process names that must never be killed, no matter what a user enters.
-pub const PROTECTED_PROCESSES: &[&str] = &[
+const PROTECTED: &[&str] = &["deepwork", "deepwork-daemon"];
+
+/// Those of the desktop and its sessions, per system (lowercase, on Windows
+/// without `.exe`).
+#[cfg(not(any(windows, target_os = "macos")))]
+const PROTECTED_HERE: &[&str] = &[
     "systemd",
     "init",
     "dbus-daemon",
@@ -45,13 +50,95 @@ pub const PROTECTED_PROCESSES: &[&str] = &[
     "wireplumber",
     "pulseaudio",
     "networkmanager",
-    "deepwork",
-    "deepwork-daemon",
     "mutter",
     "loginctl",
     "systemctl",
     "kworker",
     "xdg-desktop-portal",
+];
+
+#[cfg(windows)]
+const PROTECTED_HERE: &[&str] = &[
+    "applicationframehost",
+    "atbroker",
+    "audiodg",
+    "cmd",
+    "conhost",
+    "consent",
+    "credentialuibroker",
+    "csrss",
+    "ctfmon",
+    "deepworkctl",
+    "dllhost",
+    "dwm",
+    "explorer",
+    "fontdrvhost",
+    "livecaptions",
+    "lockapp",
+    "logonui",
+    "lsaiso",
+    "lsass",
+    "magnify",
+    "msiexec",
+    "narrator",
+    "openconsole",
+    "osk",
+    "powershell",
+    "pwsh",
+    "rundll32",
+    "runtimebroker",
+    "searchhost",
+    "securityhealthsystray",
+    "services",
+    "shellexperiencehost",
+    "shellhost",
+    "sihost",
+    "smss",
+    "spoolsv",
+    "startmenuexperiencehost",
+    "svchost",
+    "taskhostw",
+    "textinputhost",
+    "userinit",
+    "utilman",
+    "voiceaccess",
+    "wininit",
+    "winlogon",
+    "wudfhost",
+];
+
+#[cfg(target_os = "macos")]
+const PROTECTED_HERE: &[&str] = &[
+    "deepworkctl",
+    "bash",
+    "cfprefsd",
+    "controlcenter",
+    "controlstrip",
+    "coreauthd",
+    "coreservicesuiagent",
+    "distnoted",
+    "dock",
+    "finder",
+    "kernel_task",
+    "launchd",
+    "launchservicesd",
+    "login",
+    "loginwindow",
+    "lsd",
+    "notificationcenter",
+    "secd",
+    "securityagent",
+    "sh",
+    "sshd",
+    "su",
+    "sudo",
+    "systemuiserver",
+    "tccd",
+    "universalaccessd",
+    "usereventagent",
+    "windowmanager",
+    "windowserver",
+    "zsh",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -339,7 +426,18 @@ pub fn normalize_domain(raw: &str) -> Result<String, ValidationError> {
 
 pub fn is_protected_process(name: &str) -> bool {
     let n = name.to_lowercase();
-    PROTECTED_PROCESSES.contains(&n.as_str())
+    let n = if cfg!(windows) {
+        n.strip_suffix(".exe").unwrap_or(&n)
+    } else {
+        &n
+    };
+    PROTECTED.contains(&n) || PROTECTED_HERE.contains(&n) || (cfg!(windows) && is_shell_package(n))
+}
+
+/// Packages that are parts of Windows (Start menu, search, Settings): their
+/// family names end in its publisher id.
+pub(crate) fn is_shell_package(family: &str) -> bool {
+    family.to_lowercase().ends_with("_cw5n1h2txyewy")
 }
 
 /// Prefix for rules that match a substring of a process's full command line,
@@ -361,10 +459,17 @@ pub fn normalize_app(raw: &str) -> Result<String, ValidationError> {
     if s.is_empty() || s.len() > 4096 || s.contains('\0') || s.contains('\n') {
         return invalid(format!("“{s}” is not a valid application"));
     }
+    // C:/Games/x.exe is C:\Games\x.exe.
+    let path = s.get(1..3).is_some_and(|p| p == ":\\" || p == ":/");
+    let s = &if path {
+        s.replace('/', "\\")
+    } else {
+        s.to_string()
+    };
     if !s.starts_with('/') && s.contains('/') {
         return invalid(format!("“{s}” is not a valid application name"));
     }
-    let base = s.rsplit('/').next().unwrap_or(s);
+    let base = s.rsplit(['/', '\\']).next().unwrap_or(s);
     if is_protected_process(base) {
         return invalid(format!("“{s}” is a system process and cannot be blocked"));
     }

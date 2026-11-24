@@ -12,10 +12,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use windows_sys::Win32::Foundation::{
-    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE, LocalFree,
+    ERROR_PIPE_CONNECTED, GetLastError, HANDLE, INVALID_HANDLE_VALUE,
 };
 use windows_sys::Win32::Security::Authorization::{
-    ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+    ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
 };
 use windows_sys::Win32::Security::{
     GetTokenInformation, IsWellKnownSid, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES,
@@ -34,7 +34,7 @@ use windows_sys::Win32::System::Threading::{
 };
 
 use deepwork_core::client::is_service_pipe;
-use deepwork_core::windows::owned_by_admins;
+use deepwork_core::windows::{owned_by_admins, sid_string};
 
 use crate::server::{Caller, Slot, UserId, handle_conn, permitted};
 use crate::state::Daemon;
@@ -256,14 +256,7 @@ fn client(pipe: &File) -> Option<Caller> {
         if IsWellKnownSid(sid, WinLocalSystemSid) != 0 {
             return Some(Caller::Admin);
         }
-        let mut text: *mut u16 = null_mut();
-        if ConvertSidToStringSidW(sid, &mut text) == 0 || text.is_null() {
-            return None;
-        }
-        let len = (0..).take_while(|&i| *text.add(i) != 0).count();
-        let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, len));
-        LocalFree(text.cast());
-        Some(Caller::Sid(s))
+        sid_string(sid).map(Caller::Sid)
     }
 }
 

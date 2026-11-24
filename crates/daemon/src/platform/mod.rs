@@ -14,6 +14,7 @@
 use std::collections::HashSet;
 use std::net::IpAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use deepwork_core::protocol::{Capabilities, NetStatus};
 
@@ -39,7 +40,7 @@ pub struct Options {
     pub sandbox: bool,
     /// Use the network protections even in the sandbox (test namespaces).
     pub force_net: bool,
-    /// Lowest uid of a person's account. Only their processes are
+    /// Lowest uid of a person's account (not on Windows). Only their processes are
     /// network-filtered or closed by app blocks; root and system accounts
     /// (services) never are.
     pub filter_uid_min: u32,
@@ -80,8 +81,13 @@ pub trait System: Send {
 /// portable (see [`crate::procs`]).
 pub trait ProcessTable: Send {
     fn list(&self) -> Vec<Proc>;
-    /// Ask a process to quit (`force = false`) or kill it (`force = true`).
-    fn terminate(&self, pid: u32, force: bool);
+    /// How long a process gets between being asked and being killed.
+    fn grace(&self) -> Duration {
+        Duration::from_secs(3)
+    }
+    /// Ask processes (as [`ProcessTable::list`] gave them) to quit
+    /// (`force = false`) or kill them (`force = true`).
+    fn terminate(&self, processes: &[Proc], force: bool);
 }
 
 /// Which network protections a [`NetGuard`] wants or supports.
@@ -197,6 +203,9 @@ pub fn default_paths() -> Paths {
         config: "/etc/deepwork/config.json".into(),
     };
 }
+
+/// Lowest uid of a person's account, unless told otherwise.
+pub const DEFAULT_UID_MIN: u32 = if cfg!(target_os = "macos") { 500 } else { 1000 };
 
 /// Listen for clients at `path` and serve them until the process ends.
 pub fn serve(
