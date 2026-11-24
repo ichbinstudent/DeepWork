@@ -58,6 +58,8 @@ Fixes for problems found by code scanning:
   connections (ports 443 and 80) of people's programs (Linux: people's accounts; Windows: programs
   in someone's session). Giving a website the address of another machine no longer cuts off root's
   or a service's connections to it, or SSH and Remote Desktop sessions from it.
+- One user can no longer use up all of the service's connections (on Windows for good), which kept
+  everyone else, administrators included, from reaching it.
 - Files the service replaces, such as `/etc/hosts` and `/etc/sudoers`, keep their SELinux label.
 - HTTPS filter: a site name must lead to the address the connection goes to (by the system's DNS),
   for HTTPS and plain HTTP alike. Sending an allowed site's name (or an address in place of a

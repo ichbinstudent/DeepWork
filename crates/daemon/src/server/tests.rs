@@ -105,3 +105,32 @@ fn refuses_strangers_and_huge_requests() {
     handle_conn(&b"{\"cmd\":\"ping\"}\n"[..], &mut out, daemon, true);
     assert!(String::from_utf8_lossy(&out).contains("\"ok\":true"));
 }
+
+/// One user can't keep other users out, and users can't keep administrators
+/// out.
+#[test]
+fn connections_are_shared_fairly() {
+    let slots: &'static Slots = Box::leak(Box::new(Slots::new()));
+    let take = |caller: &Caller| slots.take(caller);
+    let mut held = vec![];
+    for _ in 0..MAX_PER_USER {
+        held.push(take(&Caller::Uid(1)).unwrap());
+    }
+    assert!(take(&Caller::Uid(1)).is_none());
+    assert!(take(&Caller::Sid("S-1-5-21-1".into())).is_some());
+    held.pop();
+    held.push(take(&Caller::Uid(1)).unwrap());
+
+    let mut uid = 2;
+    while let Some(slot) = take(&Caller::Uid(uid)) {
+        held.push(slot);
+        uid += 1;
+    }
+    assert_eq!(held.len(), MAX_CONNECTIONS - KEPT_FOR_ADMINS);
+    for _ in 0..KEPT_FOR_ADMINS {
+        held.push(take(&Caller::Admin).unwrap());
+    }
+    assert!(take(&Caller::Admin).is_none());
+    drop(held);
+    assert!(slots.0.lock().unwrap().is_empty());
+}

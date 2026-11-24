@@ -2,7 +2,6 @@
 //! named pipe) comes from the platform, see [`crate::platform::serve`].
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use deepwork_core::protocol::{Request, Response};
@@ -52,26 +51,60 @@ pub fn permitted(caller: Option<&Caller>, allowed: Option<&[UserId]>) -> bool {
 const MAX_REQUEST: usize = 4 << 20;
 /// Connections served at the same time; more are closed right away.
 const MAX_CONNECTIONS: usize = 64;
-static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// How many of them one user may have (the app needs a few), so that a user
+/// can't keep the others out.
+const MAX_PER_USER: usize = 16;
+/// How many are kept for administrators, however many users there are.
+const KEPT_FOR_ADMINS: usize = 8;
+
+/// The connections being served, by caller.
+pub struct Slots(Mutex<Vec<Caller>>);
+
+static SLOTS: Slots = Slots::new();
 
 /// A place among the [`MAX_CONNECTIONS`]; freed when dropped.
-pub struct Slot(());
+pub struct Slot {
+    slots: &'static Slots,
+    caller: Caller,
+}
 
 impl Slot {
-    pub fn take() -> Option<Slot> {
-        let n = CONNECTIONS.fetch_add(1, Ordering::SeqCst);
-        if n >= MAX_CONNECTIONS {
-            CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+    pub fn take(caller: &Caller) -> Option<Slot> {
+        SLOTS.take(caller)
+    }
+}
+
+impl Slots {
+    const fn new() -> Slots {
+        Slots(Mutex::new(Vec::new()))
+    }
+
+    fn take(&'static self, caller: &Caller) -> Option<Slot> {
+        let mut taken = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        let mut free = taken.len() < MAX_CONNECTIONS;
+        if *caller != Caller::Admin {
+            let users = taken.iter().filter(|c| **c != Caller::Admin).count();
+            let mine = taken.iter().filter(|c| *c == caller).count();
+            free &= mine < MAX_PER_USER && users < MAX_CONNECTIONS - KEPT_FOR_ADMINS;
+        }
+        if !free {
             eprintln!("deepwork: too many connections, refusing one");
             return None;
         }
-        Some(Slot(()))
+        taken.push(caller.clone());
+        Some(Slot {
+            slots: self,
+            caller: caller.clone(),
+        })
     }
 }
 
 impl Drop for Slot {
     fn drop(&mut self) {
-        CONNECTIONS.fetch_sub(1, Ordering::SeqCst);
+        let mut taken = self.slots.0.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = taken.iter().position(|c| *c == self.caller) {
+            taken.swap_remove(i);
+        }
     }
 }
 

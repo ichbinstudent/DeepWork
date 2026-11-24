@@ -165,8 +165,9 @@ pub fn serve(
             continue;
         }
         let daemon = daemon.clone();
-        if permitted(client(&pipe).as_ref(), allowed.as_deref()) {
-            let Some(slot) = Slot::take() else {
+        let caller = client(&pipe);
+        if let Some(caller) = caller.filter(|c| permitted(Some(c), allowed.as_deref())) {
+            let Some(slot) = Slot::take(&caller) else {
                 // SAFETY: `pipe` still owns the handle.
                 unsafe { DisconnectNamedPipe(h) };
                 continue;
