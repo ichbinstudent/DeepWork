@@ -128,9 +128,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS is off while the repository is private (its runners use
-        # minutes 10x as fast). Add macos-latest back to re-enable it.
-        os: [windows-latest]
+        os: [windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -156,13 +154,27 @@ jobs:
             }
           }
           if ($bad) { exit 1 }
-      # Windows on ARM: compile-checked from the x64 runner (ARM runners
-      # are only free for public repositories).
+      # Windows on ARM: compile-checked from the x64 runner.
       - name: Clippy (Windows on ARM)
         if: runner.os == 'Windows'
         run: |
           rustup target add aarch64-pc-windows-msvc
           cargo clippy --target aarch64-pc-windows-msvc -p deepwork-core -p deepwork-daemon --all-targets --locked -- -D warnings
+
+  # macOS: the app builds, and the service installed from source works.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install dependencies
+        run: |
+          brew install gtk4 libadwaita pkgconf
+          rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: End-to-end test
+        run: .github/scripts/macos-e2e.sh
 
   # The GTK app for Windows (built with MSYS2, natively for x64 and ARM64),
   # the installer, then an end-to-end test of it: install, block, check,

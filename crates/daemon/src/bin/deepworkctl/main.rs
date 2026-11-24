@@ -2,7 +2,7 @@
 
 use deepwork_core::client::Client;
 use deepwork_core::lists;
-use deepwork_core::model::{BlockConfig, LockKind, normalize_domain};
+use deepwork_core::model::{BlockConfig, LockKind, normalize_app, normalize_domain};
 use deepwork_core::protocol::BlockStatus;
 use deepwork_core::{format_duration, now};
 
@@ -15,8 +15,8 @@ const USAGE: &str = "usage: deepworkctl <command>
   freeze <min>           lock the whole computer for <min> minutes
   locked                 exit 0 if any block is locked or a freeze is running
   lists                  show the built-in filter lists
-  add <name> [--lock none|random|strict] <site|list:ID>...
-                         create a block, e.g. add Social list:social reddit.com
+  add <name> [--lock none|random|strict] <site|list:ID|app:NAME>...
+                         create a block, e.g. add Social list:social reddit.com app:steam
   delete <block>         delete a block (if it isn't locked)
   --version              show the version
 
@@ -42,13 +42,16 @@ fn parse_add(name: &str, rest: &[&str]) -> Result<BlockConfig, String> {
                 return Err(format!("no filter list “{id}” (see: deepworkctl lists)"));
             }
             cfg.lists.push(id.to_string());
+        } else if let Some(app) = a.strip_prefix("app:") {
+            cfg.apps
+                .push(normalize_app(app).map_err(|e| format!("{a}: {e}"))?);
         } else {
             cfg.websites
                 .push(normalize_domain(a).map_err(|e| format!("{a}: {e}"))?);
         }
     }
-    if cfg.websites.is_empty() && cfg.lists.is_empty() {
-        return Err("name at least one website or list:ID".into());
+    if cfg.websites.is_empty() && cfg.lists.is_empty() && cfg.apps.is_empty() {
+        return Err("name at least one website, list:ID or app:NAME".into());
     }
     Ok(cfg)
 }

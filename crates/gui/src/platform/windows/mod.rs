@@ -1,5 +1,7 @@
 //! Windows: a notification-area icon, and one copy of the app per user.
 
+pub mod apps;
+mod start_apps;
 pub mod tray;
 
 use std::ptr::null;

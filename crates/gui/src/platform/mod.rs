@@ -9,6 +9,8 @@
 //! Features the service can't provide on an OS are reported in
 //! `Status::capabilities`; pages hide or disable them.
 
+#[cfg(not(windows))]
+mod gio_apps;
 pub mod tray_menu;
 
 #[cfg(target_os = "linux")]
@@ -19,12 +21,9 @@ pub use linux::{apps, tray};
 #[cfg(windows)]
 pub mod windows;
 #[cfg(windows)]
-pub use fallback::apps;
-#[cfg(windows)]
-pub use windows::tray;
+pub use windows::{apps, tray};
 
-#[cfg(not(target_os = "linux"))]
-#[cfg_attr(windows, allow(dead_code))] // only its apps part on Windows
+#[cfg(not(any(target_os = "linux", windows)))]
 mod fallback;
 #[cfg(not(any(target_os = "linux", windows)))]
 pub use fallback::{apps, tray};

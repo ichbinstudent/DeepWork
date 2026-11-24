@@ -167,6 +167,8 @@ fn main() -> glib::ExitCode {
     platform::windows::set_app_id();
     #[cfg(windows)]
     platform::windows::fine_timer();
+    #[cfg(windows)]
+    platform::apps::preload();
     // One copy per user: a second one shows the first one's window instead.
     #[cfg(windows)]
     if std::env::var_os("DEEPWORK_DEBUG_SHOT").is_none()

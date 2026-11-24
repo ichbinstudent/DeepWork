@@ -3,7 +3,8 @@
 //! A block references lists by id (see `BlockConfig::lists`), so the
 //! contents stay current when DeepWork is updated. Application entries use
 //! the same rules as user-entered apps: process names (matched against the
-//! command name and executable) and desktop / Flatpak app ids.
+//! command name and executable), desktop / Flatpak app ids, and the package
+//! family names (Windows) and bundle ids (macOS) of apps.
 
 use std::collections::BTreeSet;
 
@@ -48,7 +49,18 @@ pub const LISTS: &[FilterList] = &[
             "bereal.com",
             "lemmy.world",
         ],
-        apps: &["org.kde.tokodon", "tokodon", "dev.geopjr.Tuba", "tuba"],
+        apps: &[
+            "org.kde.tokodon",
+            "tokodon",
+            "dev.geopjr.Tuba",
+            "tuba",
+            // Windows and macOS
+            "BytedancePte.Ltd.TikTok_6yccndn6064se",
+            "Facebook.InstagramBeta_8xx8rvfyw5nnt",
+            "FACEBOOK.FACEBOOK_8xx8rvfyw5nnt",
+            "9E2F88E3.TWITTER_wgeqdkkx372wm",
+            "7EE7776C.LinkedInforWindows_w1wdnht996qgy",
+        ],
     },
     FilterList {
         id: "chat",
@@ -92,6 +104,22 @@ pub const LISTS: &[FilterList] = &[
             "org.gnome.Fractal",
             "ferdium",
             "org.ferdium.Ferdium",
+            // Windows and macOS
+            "com.hnc.Discord",
+            "telegram",
+            "ru.keepcoder.Telegram",
+            "signal",
+            "org.whispersystems.signal-desktop",
+            "com.tinyspeck.slackmacgap",
+            "whatsapp",
+            "5319275A.WhatsAppDesktop_cv1g1gvanyjgm",
+            "net.whatsapp.WhatsApp",
+            "ms-teams",
+            "teams",
+            "com.microsoft.teams2",
+            "element",
+            "FACEBOOK.317180B0BB486_8xx8rvfyw5nnt",
+            "com.apple.MobileSMS",
         ],
     },
     FilterList {
@@ -134,6 +162,11 @@ pub const LISTS: &[FilterList] = &[
             "grayjay",
             "app.grayjay.Grayjay",
             "de.schmidhuberj.tubefeeder",
+            // Windows and macOS
+            "4DF9E0F8.Netflix_mcm4njqhnhss8",
+            "AmazonVideo.PrimeVideo_pwbj9vvecjh7j",
+            "Disney.37853FC22B2CE_6rarf9sa4v8jt",
+            "com.apple.TV",
         ],
     },
     FilterList {
@@ -161,6 +194,16 @@ pub const LISTS: &[FilterList] = &[
             "io.github.hrkfdn.ncspot",
             "dev.alextren.Spot",
             "deezer-desktop",
+            // Windows and macOS
+            "tidal",
+            "com.tidal.desktop",
+            "deezer",
+            "com.deezer.deezer-desktop",
+            "itunes",
+            "AppleInc.AppleMusicWin_nzyj5cx40ttqa",
+            "com.apple.Music",
+            "amazon music",
+            "com.amazon.music",
         ],
     },
     FilterList {
@@ -250,6 +293,27 @@ pub const LISTS: &[FilterList] = &[
             "cmd:org.quiltmc.loader.impl.launch.knot.KnotClient",
             "cmd:cpw.mods.bootstraplauncher.BootstrapLauncher",
             "cmd:net.minecraft.launchwrapper.Launch",
+            // Windows and macOS
+            "epicgameslauncher",
+            "com.epicgames.EpicGamesLauncher",
+            "battle.net",
+            "net.battle.app",
+            "riotclientservices",
+            "leagueclient",
+            "leagueclientux",
+            "eadesktop",
+            "ubisoftconnect",
+            "upc",
+            "galaxyclient",
+            "com.gog.galaxy",
+            "xboxpcapp",
+            "Microsoft.GamingApp_8wekyb3d8bbwe",
+            "robloxplayerbeta",
+            "com.roblox.RobloxPlayer",
+            "minecraftlauncher",
+            "Microsoft.4297127D64EC6_8wekyb3d8bbwe",
+            "minecraft.windows",
+            "Microsoft.MicrosoftSolitaireCollection_8wekyb3d8bbwe",
         ],
     },
     FilterList {
@@ -365,6 +429,14 @@ pub const LISTS: &[FilterList] = &[
             "org.kde.kmail2",
             "mailspring",
             "com.getmailspring.Mailspring",
+            // Windows and macOS
+            "outlook",
+            "olk",
+            "Microsoft.OutlookForWindows_8wekyb3d8bbwe",
+            "microsoft.windowscommunicationsapps_8wekyb3d8bbwe",
+            "com.microsoft.Outlook",
+            "com.apple.mail",
+            "emclient",
         ],
     },
     FilterList {
@@ -386,7 +458,14 @@ pub const LISTS: &[FilterList] = &[
             "chat.mistral.ai",
             "meta.ai",
         ],
-        apps: &[],
+        apps: &[
+            // Windows and macOS
+            "chatgpt",
+            "OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0",
+            "com.openai.chat",
+            "com.anthropic.claudefordesktop",
+            "Microsoft.Copilot_8wekyb3d8bbwe",
+        ],
     },
     FilterList {
         id: "rabbitholes",
@@ -594,6 +673,21 @@ pub const LISTS: &[FilterList] = &[
             "trojan",
             "naive",
             "outline-client",
+            // Windows and macOS
+            "openvpn-gui",
+            "openvpnconnect",
+            "wireguard",
+            "protonvpn.client",
+            "ch.protonvpn.mac",
+            "mullvad vpn",
+            "net.mullvad.vpn",
+            "com.nordvpn.macos",
+            "com.expressvpn.ExpressVPN",
+            "tunnelbear",
+            "cloudflare warp",
+            "v2rayn",
+            "org.torproject.torbrowser",
+            "cmd:tor browser\\browser",
         ],
     },
     FilterList {
@@ -640,6 +734,15 @@ pub const LISTS: &[FilterList] = &[
             "org.torproject.torbrowser-launcher",
             "qutebrowser",
             "org.qutebrowser.qutebrowser",
+            // Windows and macOS
+            "com.apple.Safari",
+            "com.microsoft.edgemac",
+            "com.operasoftware.Opera",
+            "iexplore",
+            "TheBrowserCompany.Arc_ttt1ap7aakyb4",
+            "company.thebrowser.Browser",
+            "duckduckgo",
+            "com.duckduckgo.macos.browser",
         ],
     },
 ];
