@@ -52,6 +52,12 @@ fn start_menu_entries() {
     ] {
         assert_eq!(rules(none, "", ""), None, "{none}");
     }
+    for shell in [
+        "MicrosoftWindows.Client.CBS_cw5n1h2txyewy!WebExperienceHost",
+        "Microsoft.Windows.SecHealthUI_cw5n1h2txyewy!SecHealthUI",
+    ] {
+        assert_eq!(rules("", "", shell), None, "{shell}");
+    }
     assert_eq!(rules("", "", "Microsoft.Windows.Explorer"), None);
     assert_eq!(rules("", "", r"{GUID}\a_b.exe"), None);
 }

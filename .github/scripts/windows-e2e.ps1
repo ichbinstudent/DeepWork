@@ -129,11 +129,13 @@ function Start-Pinger([string]$name) {
 }
 # A window that says in a file when it is asked to close.
 $asked = Join-Path $apps 'asked.txt'
+$shown = Join-Path $apps 'shown.txt'
 $window = Join-Path $apps 'window.ps1'
 @"
 Add-Type -AssemblyName System.Windows.Forms
 `$f = New-Object System.Windows.Forms.Form
 `$f.Text = 'deepwork-e2e-window'
+`$f.add_Shown({ Set-Content '$shown' 'shown' })
 `$f.add_FormClosing({ Set-Content '$asked' 'asked' })
 [System.Windows.Forms.Application]::Run(`$f)
 "@ | Set-Content $window
@@ -141,7 +143,9 @@ Copy-Item "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" "$app
 $open = Start-Process "$apps\windowed.exe" -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$window`"" -PassThru
 $running = Start-Pinger 'blockme'
 $keep = Start-Pinger 'keepme'
-Start-Sleep -Seconds 15
+for ($i = 0; $i -lt 60 -and -not (Test-Path $shown); $i++) { Start-Sleep -Seconds 1 }
+Write-Host "window shown after $i s"
+Start-Sleep -Seconds 12
 Check (-not $open.HasExited -and -not $running.HasExited) 'the test programs run'
 $out = Ctl add Apps app:blockme app:windowed.exe
 Ctl start Apps 5 | Out-Null

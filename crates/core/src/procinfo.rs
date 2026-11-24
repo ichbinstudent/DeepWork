@@ -1,6 +1,6 @@
 //! Helpers for reading process information.
 
-use crate::model::is_protected_process;
+use crate::model::{is_protected_process, is_shell_package};
 
 /// Undo systemd unit name escaping (`\x2d` → `-`).
 fn unescape(s: &str) -> String {
@@ -89,7 +89,10 @@ pub fn start_menu_rules(target: &str, arguments: &str, id: &str) -> Option<Vec<S
         // Store apps: PackageFamilyName!App.
         let (family, app) = id.split_once('!')?;
         let (name, publisher) = family.rsplit_once('_')?;
-        let ok = publisher.len() == 13 && !name.is_empty() && !app.is_empty();
+        let ok = publisher.len() == 13
+            && !name.is_empty()
+            && !app.is_empty()
+            && !is_shell_package(family);
         return (ok && !family.contains('\\')).then(|| vec![family.to_string()]);
     }
     let stem = exe_stem(target)?;
