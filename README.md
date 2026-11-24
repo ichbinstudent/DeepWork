@@ -50,8 +50,8 @@ limitations](docs/PLATFORMS.md) · [Troubleshooting](docs/TROUBLESHOOTING.md) ·
   should check is refused, never let through.
 - **App blocking**: blocked apps are closed as soon as they start, for every person's account on
   the computer (never root's or system services'). You can match an app by process
-  name, executable path, desktop/Flatpak app id, package family name (Windows Store apps) or
-  bundle id (macOS). A picker lists installed and running apps. On Windows, programs that were open
+  name, executable path, desktop/Flatpak app id, or package family name (Windows Store
+  apps). A picker lists installed and running apps. On Windows, programs that were open
   already are asked to close first.
   `cmd:<text>` rules match the full command line, e.g. `cmd:net.minecraft.client.main.Main` catches
   Minecraft whichever launcher started it.
@@ -199,14 +199,6 @@ On Windows, DeepWork blocks websites through the hosts file and browser policies
 and Firefox), so proxy and VPN extensions in those browsers don't get around a block. Blocked apps
 are closed. Freeze, the network filter and the hardcore lock aren't available yet; the app leaves
 them out.
-
-### macOS (experimental)
-
-macOS isn't tested yet, and there is no download for it. `macos/install.sh` builds DeepWork from source (with
-[Rust](https://rustup.rs), and for the app `brew install gtk4 libadwaita pkgconf`) and starts its
-service, which blocks websites (hosts file, Firefox policies) and closes blocked apps. What else
-works: [docs/PLATFORMS.md](docs/PLATFORMS.md#features-per-platform). To remove it, run
-`/Library/DeepWork/uninstall.sh`.
 Everything also works from the command line:
 
 ```powershell
@@ -282,7 +274,7 @@ the lock menu).
 | Website blocking (hosts file) | ✅ | ✅ (untested) | ✅ |
 | Cutting off sites that are already open | ✅ | — | ✅ |
 | Browser policies | ✅ | Firefox only (untested) | ✅ registry + Firefox |
-| App blocking | ✅ | — | — |
+| App blocking | ✅ | — | ✅ |
 | Encrypted DNS / HTTPS filter / VPN blocking | ✅ | — | — |
 | Freeze | ✅ | — | — |
 | *Until restart* lock | ✅ | ✅ (untested) | — |
@@ -290,10 +282,10 @@ the lock menu).
 | Service ↔ app connection | Unix socket | Unix socket | named pipe |
 | App | ✅ | — | ✅ |
 | Tray icon | ✅ | — | ✅ |
-| Running-app picker | ✅ | — | — |
+| Running-app picker | ✅ | — | ✅ |
 
 The Windows backend is checked in CI, and an end-to-end test installs the package on x64 and ARM
-Windows runners, blocks a site, checks the hosts file and Chrome's policy, screenshots the app and
+Windows runners, blocks a site and apps, checks the hosts file and Chrome's policy, screenshots the app and
 uninstalls again. It hasn't been used on real machines much yet. The macOS backend compiles but has
 never run, and CI doesn't check it. Each module's documentation lists what's still needed.
 

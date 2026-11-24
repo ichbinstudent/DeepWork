@@ -15,9 +15,6 @@ serde.workspace = true
 serde_json.workspace = true
 socket2 = { version = "0.6.5", features = ["all"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-plist = { version = "1.10.4", default-features = false }
-
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = [
     "Wdk_System_Threading",

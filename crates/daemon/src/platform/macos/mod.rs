@@ -1,6 +1,9 @@
-//! macOS: website blocking, Firefox policies and app blocking ([`procs`]).
+//! macOS: website blocking and Firefox policies so far.
 //!
 //! Still to do, roughly in order:
+//! - apps ([`ProcessTable`](super::ProcessTable)): `proc_listpids` /
+//!   `proc_pidpath` from libproc, bundle ids from the executable's
+//!   `Info.plist`, `kill(2)` to close.
 //! - browsers: Chromium-based browsers read managed preferences
 //!   (`/Library/Managed Preferences/<bundle id>.plist`), not JSON files.
 //! - freeze: needs an agent in the user's session (`CGSession -suspend`).
@@ -10,10 +13,7 @@
 //!   works as on Linux; admin rights also come from the `admin` group and
 //!   the authorization database (`security authorizationdb`).
 //!
-//! The daemon runs as a LaunchDaemon (`/Library/LaunchDaemons`), see
-//! `macos/install.sh`.
-
-mod procs;
+//! The daemon would run as a LaunchDaemon (`/Library/LaunchDaemons`).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -45,7 +45,7 @@ pub fn platform(opts: &Options) -> Platform {
                 &["/Applications/Firefox.app"],
             )),
         }),
-        processes: Some(Box::new(procs::Processes::new(opts.filter_uid_min))),
+        processes: None,
         net: None,
         admin: None,
     }
